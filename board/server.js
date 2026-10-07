@@ -145,7 +145,8 @@ function post(body, ip, contentType = '') {
 // händelser och skickar egna. En händelse ÄR ett inlägg i kanalen BUSS, så lagring och persistens finns redan. Servern fyller
 // i kvarter (vem som skickade) och djup (hur långt in i en kedja), och håller spärrarna. Ingen kan ljuga om dem.
 const BUSS = 'kollegan-events';
-const TAK = { djup: 4, perMinut: 6 };
+// Djup 6: Kollegans kedja är fråga, kö, minne, utkast, granskning och svar. Med 4 nekades svaret i sista ledet.
+const TAK = { djup: 6, perMinut: 6 };
 const TYP_RE = /^[a-zåäö0-9][a-zåäö0-9.-]{0,39}$/;
 const handelser = [];                 // {id, ts, typ, kvarter, styrka, nyttolast, orsak, djup}
 const handelseLyssnare = new Set();   // pluginens onEvent

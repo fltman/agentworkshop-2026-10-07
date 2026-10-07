@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>Örat · surret</title>
+<style>
+  :root{--bg:#0b0d10;--fg:#e6e8eb;--dim:#8b949e;--gul:#ffb454;--gron:#5fd7a7;--rod:#ff6b6b;--bla:#6cb6ff}
+  html,body{margin:0;min-height:320px;background:var(--bg);color:var(--fg);font:13px/1.4 ui-monospace,Menlo,monospace}
+  header{display:flex;align-items:center;gap:10px;padding:10px 12px 6px}
+  .ora{font-size:26px;display:inline-block}
+  .ora.surr{animation:surr .5s ease-in-out 3}
+  @keyframes surr{0%,100%{transform:rotate(0)}25%{transform:rotate(-12deg)}75%{transform:rotate(12deg)}}
+  h1{margin:0;font-size:15px;color:var(--gul);letter-spacing:.12em}
+  .sub{color:var(--dim);font-size:11px}
+  .siffror{margin-left:auto;text-align:right;color:var(--dim);font-size:11px}
+  .siffror b{color:var(--fg);font-size:15px}
+  ul{list-style:none;margin:0;padding:0 12px 12px}
+  li{border-left:3px solid var(--bla);padding:6px 8px;margin:6px 0;background:#11151a;border-radius:0 6px 6px 0}
+  li.ny{animation:in .8s ease-out}
+  @keyframes in{from{background:#2a2410;transform:translateX(-8px)}to{background:#11151a;transform:none}}
+  li.besvarad{border-color:var(--gron)} li.obesvarad{border-color:var(--rod)} li.ko{border-color:var(--dim)}
+  .q{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .meta{color:var(--dim);font-size:11px}
+  .kedja{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;align-items:center}
+  .steg{background:#1c232b;border-radius:10px;padding:1px 7px;font-size:11px}
+  .steg b{color:var(--gul);font-weight:normal}
+  .pil{color:var(--dim)}
+  .tom{color:var(--dim);padding:20px 12px;text-align:center}
+</style></head>
+<body>
+<header>
+  <span class="ora" id="ora">👂</span>
+  <div><h1>ÖRAT</h1><div class="sub" id="sub">Kollegans hörsel · fråga @kollegan i valfri kanal</div></div>
+  <div class="siffror" id="siffror"></div>
+</header>
+<ul id="lista"><li class="tom">Lyssnar… ingen har frågat @kollegan än.</li></ul>
+<script>
+const en = !/^sv/i.test(navigator.language || 'sv');
+if (en) document.getElementById('sub').textContent = "Kollegan's ear · ask @kollegan in any channel";
+const sett = new Set();
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const tid = ts => new Date(ts).toTimeString().slice(0, 5);
+
+function rad(f) {
+  const klass = f.besvarad ? 'besvarad' : f.obesvarad ? 'obesvarad' : f.iKo ? 'ko' : '';
+  const ny = !sett.has(f.inlägg) && sett.size ? ' ny' : '';
+  const status = f.besvarad ? (en ? 'answered' : 'besvarad') : f.obesvarad ? (en ? 'no one reacted' : 'ingen har reagerat')
+    : f.iKo ? (en ? 'queued' : 'i kö') : f.kedja.length ? (en ? 'travelling…' : 'på väg…') : (en ? 'heard' : 'hörd');
+  const steg = ['<span class="steg"><b>örat</b> fråga.ny' + (f.styrka != null ? ' ' + f.styrka : '') + '</span>']
+    .concat(f.kedja.map(k => '<span class="steg"><b>' + esc(k.kvarter) + '</b> ' + esc(k.typ) + (k.styrka != null ? ' ' + k.styrka : '') + '</span>'))
+    .join('<span class="pil">→</span>');
+  return '<li class="' + klass + ny + '"><div class="q">' + esc(f.fråga.replace(/@kollegan\b/i, '').trim() || f.fråga) + '</div>'
+    + '<div class="meta">' + tid(f.ts) + ' · ' + esc(f.frågare) + ' i #' + esc(f.kanal)
+    + (f.följdTill ? ' · ' + (en ? 'follow-up to ' : 'följdfråga till ') + f.följdTill : '') + ' · ' + status + '</div>'
+    + '<div class="kedja">' + steg + '</div></li>';
+}
+
+async function visa() {
+  try {
+    const [fragor, s] = await Promise.all([
+      fetch('/t/surret/fragor').then(r => r.json()),
+      fetch('/t/surret/status').then(r => r.json()),
+    ]);
+    document.getElementById('siffror').innerHTML = '<b>' + s.hört + '</b> ' + (en ? 'heard' : 'hörda') + '<br>'
+      + s.besvarade + ' ' + (en ? 'answered' : 'besvarade') + ' · ' + s.väntar + ' ' + (en ? 'waiting' : 'väntar');
+    if (!fragor.length) return;
+    if (fragor.some(f => !sett.has(f.inlägg)) && sett.size) {
+      const o = document.getElementById('ora'); o.classList.remove('surr'); void o.offsetWidth; o.classList.add('surr');
+    }
+    document.getElementById('lista').innerHTML = fragor.map(rad).join('');
+    fragor.forEach(f => sett.add(f.inlägg));
+  } catch {}
+}
+visa(); setInterval(visa, 4000);
+</script></body></html>

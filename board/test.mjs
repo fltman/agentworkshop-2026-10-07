@@ -126,20 +126,20 @@ try {
   let evs = await (await fetch(B + '/api/events?typ=paraply.upp')).json();
   assert.equal(evs.length, 1); assert.equal(evs[0].kvarter, 'paraplyet'); assert.equal(evs[0].orsak, e1.id); assert.equal(evs[0].djup, 2); ok('händelse: plugin reagerar via onEvent och board.emit');
   let orsak = e1.id;
-  for (const [i, k] of ['trafiken', 'marknaden', 'minnet'].entries()) { r = await ev({ from: k, typ: 'kedja', orsak }); assert.equal(r.status, 201); const e = await r.json(); assert.equal(e.djup, i + 2); orsak = e.id; }
-  r = await ev({ from: 'tidningen', typ: 'kedja', orsak }); assert.equal(r.status, 400); assert.match((await r.json()).error, /maxdjup/); ok('händelse: maxdjup 4');
+  for (const [i, k] of ['trafiken', 'marknaden', 'minnet', 'rosten', 'granskaren'].entries()) { r = await ev({ from: k, typ: 'kedja', orsak }); assert.equal(r.status, 201); const e = await r.json(); assert.equal(e.djup, i + 2); orsak = e.id; }
+  r = await ev({ from: 'tidningen', typ: 'kedja', orsak }); assert.equal(r.status, 400); assert.match((await r.json()).error, /maxdjup/); ok('händelse: maxdjup 6');
   r = await ev({ from: 'trafiken', typ: 'igen', orsak: e1.id }); assert.equal(r.status, 400); assert.match((await r.json()).error, /redan reagerat/); ok('händelse: en reaktion per orsak och kvarter');
   for (let i = 0; i < 6; i++) { r = await ev({ from: 'pratig', typ: 'puls' }); assert.equal(r.status, 201); }
   r = await ev({ from: 'pratig', typ: 'puls' }); assert.equal(r.status, 400); assert.match((await r.json()).error, /per minut/); ok('händelse: max 6 per minut och kvarter');
   r = await post({ from: 'fusk', channel: 'kollegan-events', text: '{"typ":"falsk"}' }); assert.equal(r.status, 400); ok('händelse: bussen går inte att skriva i direkt');
-  evs = await (await fetch(B + '/api/events')).json(); assert.equal(evs.length, 11); ok('händelser listas');
+  evs = await (await fetch(B + '/api/events')).json(); assert.equal(evs.length, 13); ok('händelser listas');
   const rad = await (await fetch(B + '/api/events?limit=1', { headers: { accept: 'text/plain' } })).text(); assert.match(rad, /pratig: puls djup=1/); ok('händelser i radformat');
   r = await fetch(B + '/api/events', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'from=formkvarter&typ=' + encodeURIComponent('väder.sol') + '&styrka=20&nyttolast=' + encodeURIComponent('{"moln":0}') });
   assert.equal(r.status, 201); assert.deepEqual((await r.json()).nyttolast, { moln: 0 }); ok('händelse via form-urlencoded (board.sh emit)');
   p2.kill(); await new Promise(res => p2.on('exit', res));
   const p3 = starta();
   await new Promise(res => p3.stdout.on('data', d => /lyssnar/.test(d) && res()));
-  evs = await (await fetch(B + '/api/events')).json(); assert.equal(evs.length, 12); assert.equal(evs.find(e => e.typ === 'paraply.upp').djup, 2); ok('händelsebussen överlever omstart, med djup');
+  evs = await (await fetch(B + '/api/events')).json(); assert.equal(evs.length, 14); assert.equal(evs.find(e => e.typ === 'paraply.upp').djup, 2); ok('händelsebussen överlever omstart, med djup');
   r = await ev({ from: 'trafiken', typ: 'igen', orsak: e1.id }); assert.equal(r.status, 400); ok('spärren överlever omstart');
   p3.kill();
   console.log(`\n${n} tester gröna`);
