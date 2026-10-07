@@ -79,8 +79,14 @@ test('real server: Pulse → Mood → HTTP status and static tile', async t => {
   assert.equal(status.fel, null);
   assert.equal(status.kanaler[0].utlosare.id, pulse.id);
   assert.equal(status.kanaler[0].utskick, 'skickat');
+  const timeline = await (await get('/t/tomhol/timeline')).json();
+  assert.equal(timeline.kanaler[0].kanal, 'bygge');
+  assert.equal(timeline.kanaler[0].intervall.reduce((total, b) => total + b.antal, 0), 20);
+  assert.equal(timeline.kanaler[0].markorer.filter(m => m.signal === 'omtanke').length, 20);
+  assert.ok(timeline.tackningFran <= timeline.till);
   assert.match(await (await get('/staden/kvarter/tomhol/index.html')).text(), /Stämningen/);
   assert.match(await (await get('/staden/kvarter/tomhol/app.js')).text(), /textContent/);
+  assert.match(await (await get('/staden/kvarter/tomhol/timeline.js')).text(), /prefers-reduced-motion/);
 });
 
 test('tile renders source text safely and surfaces fetch failures', async () => {

@@ -10,40 +10,60 @@
 //
 // GET /t/mikael/status → de senaste frågorna/svaren vi hanterat, för rutan på /staden.
 
-// Kön (fralle): reservations-API på /t/fralle/next och /t/fralle/claim, se #bygge 442. Inte alltid
-// deployat: vi kör direktflödet om det svarar 404 eller inte går att nå, och väntar bara kort på
-// "409 upptaget" innan vi kör vidare ändå, så en trög eller saknad Kö inte stoppar Kollegan.
+// Kön (fralle): reservations-API på /t/fralle/next och /t/fralle/claim, se #bygge 442/556/637 (PR 35,
+// live). Reglerna fralle satte: 409 (fel köplats/upptagen/återkallad) betyder att vi INTE får jobba
+// vidare eller publicera just nu, vi ska vänta och försöka igen, inte köra ändå. Är API:t helt onåbart
+// (nätverksfel, eller 404 om det skulle sluta finnas) litar vi inte på Kön och kör direktflödet, så en
+// nere Kö inte stoppar hela Kollegan.
 const KÖ_PORT = process.env.PORT || 8180;
 const KÖ_VÄNTA_MS = 1500;
-const KÖ_FÖRSÖK = 3;
+const KÖ_MAX_FÖRSÖK = 40; // ~60 s väntan på vår tur innan vi ger upp tyst (ingen publicering då)
 
-async function reserveraHosKön(frågaId) {
-  if (typeof fetch !== 'function') return null; // ingen fetch i den här node-versionen, kör utan kön
+async function försökReservera(frågaId) {
+  if (typeof fetch !== 'function') return 'onåbar'; // ingen fetch i den här node-versionen
   try {
     const svar = await fetch(`http://127.0.0.1:${KÖ_PORT}/t/fralle/claim`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ fråga_id: frågaId, team: 'mikael' }),
     });
-    if (svar.status === 409) return false;   // fel köplats eller redan upptagen
-    if (!svar.ok) return null;               // t.ex. 404: API:t är inte live än
-    return true;
+    if (svar.ok) return 'reserverad';
+    if (svar.status === 409) return 'nekad';     // fel köplats, upptagen, eller återkallad: vänta
+    if (svar.status === 404) return 'onåbar';     // API:t finns inte (ännu), kör utan kön
+    return 'onåbar';                              // oväntat fel: lita inte på kön just nu
   } catch {
-    return null; // Kön onåbar just nu
+    return 'onåbar'; // Kön onåbar just nu
   }
 }
 
-async function väntaPåTurOchSchemalägg(frågaId, board, väntetid) {
-  for (let försök = 0; försök < KÖ_FÖRSÖK; försök++) {
-    const resultat = await reserveraHosKön(frågaId);
-    if (resultat !== false) break; // reserverad, eller Kön onåbar/saknas: kör vidare ändå
+// Reserverar innan vi jobbar vidare. Ger "reserverad" (kör), "stoppa" (ge upp tyst, publicera inte)
+// eller "onåbar" (Kön kan inte svara för oss, kör direktflödet som innan reservations-API:t fanns).
+async function säkraReservation(frågaId) {
+  for (let försök = 0; försök < KÖ_MAX_FÖRSÖK; försök++) {
+    if (!pending.has(frågaId)) return 'stoppa'; // frågan plockades bort under tiden
+    const resultat = await försökReservera(frågaId);
+    if (resultat === 'reserverad' || resultat === 'onåbar') return resultat;
+    // 'nekad': inte vår tur än, vänta och försök igen utan att jobba vidare
     await new Promise((klar) => setTimeout(klar, KÖ_VÄNTA_MS));
   }
+  return 'stoppa'; // väntat länge nog, ger upp tyst hellre än att bryta mot turordningen
+}
+
+async function väntaPåTurOchSchemalägg(frågaId, board, väntetid) {
+  const status = await säkraReservation(frågaId);
+  if (status === 'stoppa') { pending.delete(frågaId); return; }
   const timer = setTimeout(() => {
     try { formuleraSvar(frågaId, board); }
     catch (err) { console.error('[mikael] kunde inte formulera svar', err && err.message); }
   }, väntetid);
   if (timer.unref) timer.unref();
+}
+
+// Körs direkt före publicering: förnyar reservationen. Nekas förnyelsen ska vi inte publicera
+// (fralle #bygge 556/637): någon annan har tagit över eller frågan är återkallad.
+async function fårPublicera(frågaId) {
+  const status = await försökReservera(frågaId);
+  return status !== 'nekad';
 }
 
 const VÄNTA_PÅ_MINNE_MS = 2500;
@@ -106,25 +126,37 @@ module.exports = {
       if (!post) return;
       if (post.granskningsTimer) { clearTimeout(post.granskningsTimer); post.granskningsTimer = null; }
 
-      const styrka = typeof e.styrka === 'number' ? e.styrka : 50;
-      const osäkert = styrka < 60;
-      const text = (osäkert ? '(osäkert) ' : '') + post.svarstext;
-      // "Kollegan: " i stället för "@kollegan": ett svar som börjar med @kollegan hörs av Örat
-      // som en ny fråga, och kedjan loopar på sig själv.
-      const hälsning = post.frågare ? `Kollegan: @${post.frågare}, ` : 'Kollegan: ';
-
-      reserveraHosKön(frågaId).catch(() => {}); // förnyar reservationen hos Kön innan vi publicerar
-      board.post(`${hälsning}${text}`, post.kanal, post.inlägg);
-      board.emit('svar.klart', { orsak: e.id, styrka, nyttolast: { fråga: post.fråga, fråga_id: frågaId, inlägg: post.inlägg } });
-
-      historik.push({ fråga: post.fråga, svar: text, styrka, ts: Date.now() });
-      if (historik.length > MAX_HISTORIK) historik.shift();
-
-      pending.delete(frågaId);
+      publiceraGranskatSvar(frågaId, e, board)
+        .catch((err) => console.error('[mikael] kunde inte publicera granskat svar', err && err.message));
       return;
     }
   },
 };
+
+async function publiceraGranskatSvar(frågaId, e, board) {
+  const post = pending.get(frågaId);
+  if (!post) return;
+
+  // Förnyar reservationen innan publicering. Nekas den (409: upptagen/återkallad) publicerar vi
+  // inte, enligt fralle #bygge 556/637.
+  if (!(await fårPublicera(frågaId))) { pending.delete(frågaId); return; }
+  if (!pending.has(frågaId)) return; // borttagen under väntan
+
+  const styrka = typeof e.styrka === 'number' ? e.styrka : 50;
+  const osäkert = styrka < 60;
+  const text = (osäkert ? '(osäkert) ' : '') + post.svarstext;
+  // "Kollegan: " i stället för "@kollegan": ett svar som börjar med @kollegan hörs av Örat
+  // som en ny fråga, och kedjan loopar på sig själv.
+  const hälsning = post.frågare ? `Kollegan: @${post.frågare}, ` : 'Kollegan: ';
+
+  board.post(`${hälsning}${text}`, post.kanal, post.inlägg);
+  board.emit('svar.klart', { orsak: e.id, styrka, nyttolast: { fråga: post.fråga, fråga_id: frågaId, inlägg: post.inlägg } });
+
+  historik.push({ fråga: post.fråga, svar: text, styrka, ts: Date.now() });
+  if (historik.length > MAX_HISTORIK) historik.shift();
+
+  pending.delete(frågaId);
+}
 
 function hittaFråga(orsakId) {
   // orsak kan peka direkt på fråga.ny, eller på en tidigare minne-händelse i samma kedja.
@@ -137,8 +169,20 @@ function hittaFråga(orsakId) {
 
 function plockaText(nyttolast) {
   if (!nyttolast) return null;
-  const kandidat = nyttolast.svar || nyttolast.sammanfattning || nyttolast.text || nyttolast.kunskap || nyttolast.fakta;
-  return typeof kandidat === 'string' ? kandidat : null;
+  // nyttolast.rad (Pulsen m.fl.) är redan ett läsbart radformat, föredra den. Annars svar/sammanfattning/
+  // text/kunskap/fakta, men städa bort inbäddad rå JSON som Minnets generiska fallback ibland bifogar
+  // (t.ex. ett citerat {"kanal":...} från en annan händelse) — se #bygge 530/561.
+  const kandidat = nyttolast.rad || nyttolast.svar || nyttolast.sammanfattning || nyttolast.text || nyttolast.kunskap || nyttolast.fakta;
+  if (typeof kandidat !== 'string') return null;
+  const städad = städaRåJson(kandidat);
+  return städad || null;
+}
+
+function städaRåJson(text) {
+  // Klipper bort allt från första '{"' (ett JSON-objekt som smugit med), behåller texten innan.
+  const index = text.indexOf('{"');
+  const kort = index === -1 ? text : text.slice(0, index).trim();
+  return kort;
 }
 
 function formuleraSvar(frågaId, board) {
@@ -183,13 +227,20 @@ function postaOgranskat(frågaId, utkastId, board) {
   const post = pending.get(frågaId);
   if (!post) return; // redan besvarad via svar.granskat, eller borttagen
 
-  const hälsning = post.frågare ? `Kollegan: @${post.frågare}, ` : 'Kollegan: ';
-  reserveraHosKön(frågaId).catch(() => {}); // förnyar reservationen innan ogranskat svar publiceras
-  board.post(`${hälsning}(ogranskat) ${post.svarstext}`, post.kanal, post.inlägg);
-  board.emit('svar.klart', { orsak: utkastId, nyttolast: { fråga: post.fråga, fråga_id: frågaId, inlägg: post.inlägg } });
+  fårPublicera(frågaId)
+    .then((ok) => {
+      const post2 = pending.get(frågaId);
+      if (!post2) return; // hanterad under tiden
+      if (!ok) { pending.delete(frågaId); return; } // nekad förnyelse: publicera inte
 
-  historik.push({ fråga: post.fråga, svar: `(ogranskat) ${post.svarstext}`, styrka: null, ts: Date.now() });
-  if (historik.length > MAX_HISTORIK) historik.shift();
+      const hälsning = post2.frågare ? `Kollegan: @${post2.frågare}, ` : 'Kollegan: ';
+      board.post(`${hälsning}(ogranskat) ${post2.svarstext}`, post2.kanal, post2.inlägg);
+      board.emit('svar.klart', { orsak: utkastId, nyttolast: { fråga: post2.fråga, fråga_id: frågaId, inlägg: post2.inlägg } });
 
-  pending.delete(frågaId);
+      historik.push({ fråga: post2.fråga, svar: `(ogranskat) ${post2.svarstext}`, styrka: null, ts: Date.now() });
+      if (historik.length > MAX_HISTORIK) historik.shift();
+
+      pending.delete(frågaId);
+    })
+    .catch((err) => console.error('[mikael] kunde inte posta ogranskat svar', err && err.message));
 }
