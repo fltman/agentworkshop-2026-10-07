@@ -93,6 +93,8 @@ mellan hämtningarna. Efter snapshot-tiden är området okänt tills nästa
 hämtning. Vid fel behålls gammalt underlag med varning. Efter 15 sekunder
 markeras det inaktuellt. Dold sida pausar animering och hämtning;
 reducerad rörelse innebär endast uppdatering vid hämtning.
+Hämtningsfelets orsak och åldern på senaste lyckade hämtning visas även
+under animation. Statusen återgår till ansluten först efter en lyckad hämtning.
 
 Risker: regler missar nyanser; mycket trafik kan begränsa historiken;
 smala rutor kan ge täta symboler. Detaljerna bevarar källorna.

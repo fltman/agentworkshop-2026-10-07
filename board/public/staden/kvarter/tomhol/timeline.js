@@ -109,14 +109,19 @@ if (typeof document !== 'undefined') {
   let data = null;
   let received = 0;
   let frame = null;
-  let failed = false;
+  let fetchError = null;
 
   function draw() {
     if (!data) return;
     const now = data.till + Math.max(0, performance.now() - received);
     const offset = (now - data.till) / 600000 * 600;
     for (const svg of container.querySelectorAll('svg')) svg.setAttribute('viewBox', `${offset} 0 600 120`);
-    status.textContent = `${failed ? 'Hämtningsfel – tidigare data visas. ' : ''}10 min · 10 sek/intervall · samma skala 0–10. Grått = okänt. ${now - data.till > 15000 ? 'Underlaget är inaktuellt.' : 'Ansluten.'}`;
+    const ageMs = now - data.till;
+    const age = Math.floor(ageMs / 1000);
+    const connection = fetchError !== null
+      ? `Hämtningsfel: ${fetchError}. Tidigare data visas; senaste lyckade hämtning för ${age} s sedan.`
+      : `Ansluten. Senaste lyckade hämtning för ${age} s sedan.`;
+    status.textContent = `${connection} 10 min · 10 sek/intervall · samma skala 0–10. Grått = okänt.${ageMs > 15000 ? ' Underlaget är inaktuellt.' : ''}`;
   }
   function animate() {
     frame = null;
@@ -142,13 +147,13 @@ if (typeof document !== 'undefined') {
           next.intervallMs !== 10000 || next.maxSkala !== 10) throw new Error('Ogiltigt tidslinjesvar');
       data = next;
       received = performance.now();
-      failed = false;
+      fetchError = null;
       Timeline.render(container, data, data.till);
       resume();
     } catch (err) {
-      failed = true;
+      fetchError = err.message;
       if (data) draw();
-      status.textContent = `Kunde inte hämta tidslinjer: ${err.message}. ${data ? 'Tidigare data kan vara inaktuella; grått område är okänt.' : 'Underlag saknas.'}`;
+      else status.textContent = `Kunde inte hämta tidslinjer: ${fetchError}. Underlag saknas.`;
     } finally {
       setTimeout(refreshTimeline, 5000);
     }
