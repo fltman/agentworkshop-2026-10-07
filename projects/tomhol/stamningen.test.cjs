@@ -193,3 +193,71 @@ test('route does not intercept other methods or paths; contexts are isolated', (
   }, { ...s.ctx });
   assert.equal(status.kanaler.length, 1);
 });
+
+test('automated replies and our own posts are not counted; sharper questions; wider obstacles', () => {
+  const s = setup();
+  const push = (text, from) => s.messages.push({ id: s.messages.length + 1, text, from, channel: 'bygge', ts: Date.now() });
+  push('Kollegan: @x, vem bygger kön? fralle bygger Kön.', 'mikael');
+  push('Lotsen: Kollegan är inte säker här. Tack!', 'babtist');
+  push('PR inne från tomhol: Bra jobbat alla', 'tomhol');
+  push('Vi kör när en fråga kommer, och hur det går vet vi sen.', 'a');
+  push('@kollegan vem bygger minnet', 'b');
+  push('Vad gör vi nu.', 'c');
+  push('Jag sitter fast med bygget, testet failar och det blir timeout.', 'd');
+  push('Det går inte att deploya.', 'e');
+  s.event();
+  const p = s.sent[0].nyttolast;
+  assert.equal(p.antalInlagg, 5);
+  assert.deepEqual(p.signaler, { fragor: 2, hinder: 2, uppskattning: 0, omtanke: 0 });
+  assert.deepEqual(p.kallor.filter(k => k.signal === 'fragor').map(k => k.uttryck), ['vem', 'Vad']);
+  assert.equal(p.kallor.find(k => k.inlagg === 7).uttryck, 'sitter fast');
+});
+
+test('non-conversation channels are skipped without errors', () => {
+  const s = setup();
+  s.message('Tack! ❤️', 0, 'stadens-saga');
+  s.message('Tack!', 0, 'radio');
+  s.event({ nyttolast: { hetaste: 'stadens-saga' } });
+  s.event({ id: 124, typ: 'puls.tryck', nyttolast: { kanal: 'radio' } });
+  assert.equal(s.sent.length, 0);
+  const status = s.status();
+  assert.equal(status.fel, null);
+  assert.equal(status.kanaler.length, 0);
+});
+
+test('rad reports the trend against the previous assessment', t => {
+  let now = 1800000000000;
+  t.mock.method(Date, 'now', () => now);
+  const s = setup();
+  s.message('Hur gör man?');
+  s.event();
+  assert.doesNotMatch(s.sent[0].nyttolast.rad, /Jämfört|Oförändrat/);
+  now += 11000;
+  s.message('Varför då?');
+  s.message('Det går inte.');
+  s.event({ id: 124 });
+  assert.match(s.sent[1].nyttolast.rad, /Jämfört med förra bedömningen: frågor 1→2, hinder 0→1\./);
+  assert.ok(JSON.stringify(s.sent[1]).length <= 2000);
+});
+
+test('pause and resume via @tomhol from our team or ledarens-agent only', () => {
+  const s = setup();
+  const posts = [];
+  s.ctx.board.post = (text, channel, replyTo) => posts.push({ text, channel, replyTo });
+  plugin.onMessage({ id: 900, from: 'someone', channel: 'bygge', text: '@tomhol pausa', ts: Date.now() }, s.ctx);
+  assert.equal(s.status().pausad, false);
+  plugin.onMessage({ id: 901, from: 'ledarens-agent', channel: 'bygge', text: '@tomhol pausa under demon', ts: Date.now() }, s.ctx);
+  assert.equal(s.status().pausad, true);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].replyTo, 901);
+  assert.doesNotMatch(posts[0].text, /@tomhol/);
+  s.message('Tack!');
+  s.event();
+  assert.equal(s.sent.length, 0);
+  assert.equal(s.status().kanaler[0].utskick, 'pausad: bara visning');
+  plugin.onMessage({ id: 902, from: 'tomhol', channel: 'bygge', text: '@tomhol fortsätt', ts: Date.now() }, s.ctx);
+  assert.equal(s.status().pausad, false);
+  assert.equal(posts.length, 2);
+  s.event({ id: 124 });
+  assert.equal(s.sent.length, 1);
+});
