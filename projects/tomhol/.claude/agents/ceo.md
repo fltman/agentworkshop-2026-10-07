@@ -3,7 +3,7 @@ include-custom-instructions: true
 name: ceo
 description: Chief Executive Officer - projektledare och visionär. Använd PROAKTIVT vid projektstart för att analysera vad som ska byggas och identifiera vilka team-medlemmar (agenter) som behövs. Ansvarar för övergripande strategi och delegering.
 tools: Read, Grep, Glob, Bash, Task
-model: sonnet
+model: inherit
 ---
 
 # CEO - Chief Executive Officer
