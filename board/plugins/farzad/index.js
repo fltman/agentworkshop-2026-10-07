@@ -12,6 +12,10 @@
 //   kvarter skrivit en rad beställs en bild från Ateljén (högst var femtonde minut, bilder kostar).
 //   skickar     saga.början {nr, text, inlägg, kanal}, saga.klar {nr, text, rader}, bild.beställning
 //
+//   Är ni vakna? Var tionde minut (om staden rört sig) skickas nyfikenhet.ping. Varje kvarter som svarar
+//   inom två minuter, med vilken händelse som helst som har orsak = pingen (helst nyfikenhet.pong {status}),
+//   syns som vaket i rutan, med svarstid och statusrad, och hamnar på topplistan.
+//
 //   GET  /t/farzad/state  → vad Kollegan undrar nu, historik, när nästa fråga får komma, sagan
 //   POST /t/farzad/vack   → en människa väcker nyfikenheten (kortare spärr)
 
@@ -28,6 +32,8 @@ const SAGA_KANAL = 'stadens-saga';
 const SAGA_MS = 5 * 60 * 1000;           // en ny saga högst var femte minut
 const SAGA_SAMLA_MS = 4 * 60 * 1000;     // så länge raderna samlas in
 const SAGA_MAX_RADER = 8;
+const PING_MS = 10 * 60 * 1000;          // upprop högst var tionde minut
+const PING_SAMLA_MS = 2 * 60 * 1000;     // så länge svaren räknas
 const BILD_MS = 15 * 60 * 1000;
 
 const FORMAGOR = {
@@ -64,6 +70,11 @@ const st = {
   senasteSaga: 0,
   senasteBild: 0,
   senasteHandelse: 0,                    // när något annat kvarter senast skickade något på bussen
+  ping: null,                            // pågående upprop: {nr, ts, händelse, svar: [{kvarter, ms, status}]}
+  upprop: [],                            // färdiga upprop, senaste sist
+  pingNr: 0,
+  senastePing: 0,
+  topplista: {},                         // kvarter → {svar, bästaMs, senast, status}
   timer: null,
   fil: null,
 };
@@ -127,6 +138,7 @@ function spara() {
     fs.writeFileSync(st.fil, JSON.stringify({
       senasteFraga: st.senasteFraga, historik: st.historik.slice(-50),
       saga: st.saga, sagor: st.sagor.slice(-20), sagaNr: st.sagaNr, senasteSaga: st.senasteSaga, senasteBild: st.senasteBild,
+      ping: st.ping, upprop: st.upprop.slice(-10), pingNr: st.pingNr, senastePing: st.senastePing, topplista: st.topplista,
     }));
   } catch (err) { console.error('[farzad] spara:', err.message); }
 }
@@ -151,7 +163,7 @@ function startaSaga(board, team, nu) {
   const [a, b] = huvudpersoner(board, team);
   const inledning = slump(SAGOR).replace('{A}', a).replace('{B}', b);
   const nr = st.sagaNr + 1;
-  const p = board.post(`📖 Stadens saga nr ${nr}: ${inledning}\n@kollegan, vad händer sen? `
+  const p = board.post(`📖 Stadens saga nr ${nr}: ${inledning}\nVad händer sen? `
     + 'Alla får fortsätta med EN mening: svara på det här inlägget, eller skicka saga.rad på bussen. Sagan samlas ihop om fyra minuter.', SAGA_KANAL);
   if (p.error) { console.error('[farzad] saga:', p.error); return; }
   const r = board.emit('saga.början', { nyttolast: { nr, text: inledning, inlägg: p.message.id, kanal: SAGA_KANAL } });
@@ -164,8 +176,11 @@ function startaSaga(board, team, nu) {
 
 function sagaRad(från, rad) {
   const s = st.saga;
-  const t = text(String(rad || '').replace(/^\s*(kollegan|lotsen)\s*:\s*/i, '').replace(/^(@[\w.-]+[\s,]+)+/, ''), 180);
-  // Rösten svarar ibland med rå händelsedata i stället för en mening; det hör inte hemma i en saga.
+  // Automatiska svar från Kollegans kedja ("Kollegan: ...", "Lotsen: ...") är inga sagarader.
+  if (/^\s*(kollegan|lotsen)\b[^:]{0,20}:/i.test(String(rad || ''))) return;
+  const t = text(String(rad || '').replace(/^(@[\w.-]+[\s,]+)+/, ''), 180)
+    .replace(/\s*\(([^()]{1,30})\)\s*$/, (m, n) => (n === från || n === namn(från) ? '' : m));
+  // Rå händelsedata i stället för en mening hör inte hemma i en saga.
   if (/[{[]\s*"/.test(t)) return;
   if (!s || !t || s.rader.length >= SAGA_MAX_RADER || s.rader.some(x => x.från === från)) return;
   s.rader.push({ från, text: t, ts: Date.now() });
@@ -198,6 +213,44 @@ function avslutaSaga(board, team, nu) {
   }
   st.sagor.push(s);
   st.sagor = st.sagor.slice(-20);
+  spara();
+}
+
+// Upprop: "Är ni vakna?" Varje kvarter som svarar på pingen (vilken typ som helst, med orsak = pingen)
+// räknas som vaket, med svarstid och en statusrad.
+function startaPing(board, nu) {
+  if (st.ping || nu - st.senastePing < PING_MS || st.senasteHandelse <= st.senastePing) return;
+  const nr = st.pingNr + 1;
+  const r = board.emit('nyfikenhet.ping', {
+    nyttolast: { nr, fråga: 'Är ni vakna?', svara: 'nyfikenhet.pong med orsak = den här händelsens id, nyttolast {status: en kort rad om hur ni mår}' },
+  });
+  if (r.error) { console.error('[farzad] ping:', r.error); return; }
+  st.pingNr = nr;
+  st.senastePing = nu;
+  st.ping = { nr, ts: r.handelse.ts || nu, händelse: r.handelse.id, svar: [] };
+  spara();
+}
+
+function pong(e) {
+  const p = st.ping;
+  if (!p || p.svar.some(x => x.kvarter === e.kvarter)) return;
+  const ms = Math.max(0, (e.ts || Date.now()) - p.ts);
+  const status = falt(e.nyttolast, 'status', 'text', 'rad');
+  p.svar.push({ kvarter: e.kvarter, ms, status, typ: e.typ });
+  const t = st.topplista[e.kvarter] || { svar: 0, bästaMs: null };
+  st.topplista[e.kvarter] = {
+    svar: t.svar + 1, bästaMs: t.bästaMs === null ? ms : Math.min(t.bästaMs, ms), senast: p.nr, status: status || t.status || '',
+  };
+  spara();
+}
+
+function avslutaPing(nu) {
+  const p = st.ping;
+  if (!p || nu - p.ts < PING_SAMLA_MS) return;
+  st.ping = null;
+  p.klar = nu;
+  st.upprop.push(p);
+  st.upprop = st.upprop.slice(-10);
   spara();
 }
 
@@ -258,6 +311,11 @@ module.exports = {
       st.sagaNr = d.sagaNr || 0;
       st.senasteSaga = d.senasteSaga || 0;
       st.senasteBild = d.senasteBild || 0;
+      st.ping = d.ping || null;
+      st.upprop = Array.isArray(d.upprop) ? d.upprop : [];
+      st.pingNr = d.pingNr || 0;
+      st.senastePing = d.senastePing || 0;
+      st.topplista = d.topplista && typeof d.topplista === 'object' ? d.topplista : {};
     } catch {}
     // Timern väcker bara kandidater som redan kommit från andra kvarter, när tystnaden räckt länge nog,
     // och börjar en saga bara om staden rört sig sedan förra.
@@ -265,6 +323,8 @@ module.exports = {
       try { fraga(board); } catch (err) { console.error('[farzad]', err && err.message); }
       try { const nu = Date.now(); avslutaSaga(board, team, nu); startaSaga(board, team, nu); }
       catch (err) { console.error('[farzad] saga:', err && err.message); }
+      try { const nu = Date.now(); avslutaPing(nu); startaPing(board, nu); }
+      catch (err) { console.error('[farzad] ping:', err && err.message); }
     }, 30 * 1000);
     if (st.timer.unref) st.timer.unref();
   },
@@ -292,6 +352,7 @@ module.exports = {
 
   onEvent(e, { team, board }) {
     if (e.kvarter === team || !e.typ) return;
+    if (st.ping && e.orsak && e.orsak === st.ping.händelse) return pong(e);
     if (e.typ === 'saga.rad' && st.saga && e.orsak && e.orsak === st.saga.händelse) {
       return sagaRad(e.kvarter, falt(e.nyttolast, 'text', 'rad', 'mening'));
     }
@@ -335,6 +396,13 @@ module.exports = {
           sagor: st.sagor.slice(-5).reverse(),
           nästa: st.saga ? null : st.senasteSaga + SAGA_MS,
           kanal: SAGA_KANAL,
+        },
+        upprop: {
+          pågår: st.ping ? { ...st.ping, slut: st.ping.ts + PING_SAMLA_MS } : null,
+          senaste: st.upprop[st.upprop.length - 1] || null,
+          topplista: st.topplista,
+          kvarter: [...new Set([...st.settKvarter, ...Object.keys(st.topplista)])].filter(k => k !== 'farzad'),
+          nästa: st.ping ? null : st.senastePing + PING_MS,
         },
       });
       return true;

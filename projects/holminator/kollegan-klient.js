@@ -47,12 +47,14 @@ async function fragaKollegan(fraga, opts = {}) {
   const inlagg = (await svar.json()).id;
 
   // 2. Vänta på Röstens svar: ett inlägg som svarar på vårt och börjar med "Kollegan:".
-  //    Lotsens "Lotsen: ..." och andra trådsvar sållas bort på prefixet.
+  //    Lotsens "Lotsen: ..." fångas separat som hänvisning när Rösten inte svarar.
   let svarInlagg = null;
+  let lotsInlagg = null;
   while (Date.now() - t0 < timeoutMs) {
     await new Promise(r => setTimeout(r, pollMs));
     const nya = await hamtaJson(`${bas}/api/messages?channel=${encodeURIComponent(kanal)}&since=${inlagg}`);
     svarInlagg = nya.find(m => m.reply_to === inlagg && /^Kollegan:/.test(m.text || ''));
+    lotsInlagg = lotsInlagg || nya.find(m => m.reply_to === inlagg && /^Lotsen:/.test(m.text || ''));
     if (svarInlagg) break;
   }
 
@@ -63,6 +65,25 @@ async function fragaKollegan(fraga, opts = {}) {
   const svarKlart = handelser.find(e => e.typ === 'svar.klart' && e.nyttolast && e.nyttolast.inlägg === inlagg);
 
   const text = svarInlagg ? svarInlagg.text.replace(/^Kollegan:\s*/, '') : null;
+
+  // 4. Om Rösten aldrig svarade: rädda det kedjan hann producera, så en timeout blir användbar.
+  //    Minnets minne.träff bär ett svar även innan Rösten formulerat det slutliga.
+  const idIKedjan = new Set(kedja.map(e => e.id));
+  const kedjaHandelser = handelser.filter(e => idIKedjan.has(e.id));
+  const traff = kedjaHandelser.find(e => e.typ === 'minne.träff' && e.nyttolast && typeof e.nyttolast.svar === 'string');
+  const preliminärtSvar = text ? null : (traff ? traff.nyttolast.svar : null);
+  const lotsHänvisning = lotsInlagg ? (String(lotsInlagg.text).match(/@([\w.-]+)/) || [])[1] || null : null;
+
+  let diagnos = null;
+  if (!svarInlagg) {
+    const sista = kedja.length ? kedja[kedja.length - 1] : null;
+    const steg = sista ? `${sista.kvarter}:${sista.typ}` : 'ingen händelse';
+    diagnos = `Rösten postade inget slutligt svar inom ${Math.round(timeoutMs / 1000)} s. ` +
+      `Kedjan nådde ${steg}.` +
+      (preliminärtSvar ? ` Minnets preliminära svar: ${preliminärtSvar}` : '') +
+      (lotsHänvisning ? ` Lotsen hänvisade till @${lotsHänvisning}.` : '');
+  }
+
   return {
     fråga: fraga,
     svar: text,
@@ -72,6 +93,9 @@ async function fragaKollegan(fraga, opts = {}) {
     svarInlägg: svarInlagg ? svarInlagg.id : null,
     kedja,
     besvarad: Boolean(svarInlagg),
+    preliminärtSvar,
+    lotsHänvisning,
+    diagnos,
     ms: Date.now() - t0,
   };
 }
@@ -81,7 +105,14 @@ async function cli() {
   if (!fraga) { console.error('Användning: node kollegan-klient.js "din fråga till Kollegan"'); process.exit(2); }
   console.log(`→ frågar Kollegan på ${STANDARD_BAS}: "${fraga}"`);
   const r = await fragaKollegan(fraga);
-  if (!r.besvarad) { console.log(`✗ inget svar inom tidsgränsen (frågan postades som inlägg ${r.inlägg}).`); process.exit(1); }
+  if (!r.besvarad) {
+    console.log(`✗ inget slutligt svar inom tidsgränsen (frågan postades som inlägg ${r.inlägg}).`);
+    if (r.diagnos) console.log(`  ${r.diagnos}`);
+    if (r.kedja.length) {
+      console.log('    örat fråga.ny → ' + r.kedja.map(e => `${e.kvarter}:${e.typ}${e.styrka != null ? ' ' + e.styrka : ''}`).join(' → '));
+    }
+    process.exit(1);
+  }
   console.log(`\nKollegan${r.osäkert ? ' (osäkert)' : ''}: ${r.svar}`);
   console.log(`  styrka ${r.styrka ?? '?'} · svar på ${(r.ms / 1000).toFixed(1)} s · inlägg ${r.svarInlägg}`);
   if (r.kedja.length) {

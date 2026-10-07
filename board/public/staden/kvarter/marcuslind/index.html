@@ -71,11 +71,11 @@ const visaSms = () => fetch('/t/marcuslind/sms').then(r => r.json()).then(d => {
   valtAlias = sel.value || valtAlias;
   sel.innerHTML = d.mottagare.length
     ? d.mottagare.map(a => `<option value="${esc(a)}"${a === valtAlias ? ' selected' : ''}>${esc(a)}</option>`).join('')
-    : '<option value="">inga mottagare på vitlistan</option>';
+    : '<option value="">inga mottagare</option>';
   document.getElementById('smstext').maxLength = d.maxTecken;
   document.getElementById('smsknapp').disabled = !d.mottagare.length || d.kvarDennaTimme === 0;
   document.getElementById('smsinfo').textContent =
-    `${d.läge === 'test' ? 'testläge, inget skickas på riktigt' : 'skarpt läge'} · ${d.kvarDennaTimme} kvar denna timme`;
+    `testläge, inget skickas på riktigt · ${d.kvarDennaTimme} kvar denna timme`;
   document.getElementById('smslista').innerHTML = d.senaste.map(s => `
     <li><div class="rad1"><span class="kanal">${esc(s.till)}</span><span class="antal">${esc(s.status)}</span></div>
     <div class="text">${esc(s.text)}</div></li>`).join('');
