@@ -5,6 +5,7 @@ const rules = {
   fragor: /\?|(?<![\p{L}])(?:hur|varför|vem|vilka|vilken|när|how|why|who|what|when|where)(?![\p{L}])/giu,
   hinder: /(?<![\p{L}])(?:fastnat|blockerad|blocked|stuck|fungerar inte|funkar inte|doesn't work|does not work|not working)(?![\p{L}])/giu,
   uppskattning: /(?<![\p{L}])(?:tack|thanks|thank you|bra jobbat|well done|snyggt)(?![\p{L}])/giu,
+  omtanke: /[❤♥]\uFE0F?|(?<![\p{L}])(?:hoppas det löser sig|ta den tid du behöver|jag finns här|vi finns här|hope it works out|take your time|i am here for you|i'm here for you|we are here for you)(?![\p{L}])/giu,
 };
 
 function state(ctx) {
@@ -23,12 +24,12 @@ function assess(messages, kanal, now) {
     Number.isFinite(m.ts) && m.ts > now - WINDOW_MS && m.ts <= now &&
     typeof m.text === 'string'
   ).sort((a, b) => a.ts - b.ts || a.id - b.id).slice(-LIMIT);
-  const signaler = { fragor: 0, hinder: 0, uppskattning: 0 };
+  const signaler = { fragor: 0, hinder: 0, uppskattning: 0, omtanke: 0 };
   const kallor = [];
   for (const m of recent) {
     for (const [signal, rule] of Object.entries(rules)) {
       const matches = [...m.text.matchAll(rule)].filter(match => {
-        if (signal !== 'hinder') return true;
+        if (signal !== 'hinder' && signal !== 'omtanke') return true;
         const before = m.text.slice(0, match.index);
         return !/(?:inte|inte längre|aldrig|ej|not|no longer|never)\s+(?:\p{L}+\s+){0,2}$/iu.test(before);
       });
@@ -49,6 +50,7 @@ function assess(messages, kanal, now) {
       'Språksignaler, inte bedömningar av personers känslor.',
       'Ironi, citat och sammanhang kan feltolkas. Regelordlistan är begränsad.',
       'Högst sex källexempel visas; signalantal gäller hela underlaget.',
+      'Omtanke är uttryckta stödfraser eller hjärtan; avsikt och ironi kan inte avgöras.',
     ],
   };
 }

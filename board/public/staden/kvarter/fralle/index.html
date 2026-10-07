@@ -11,15 +11,30 @@
   <header><span>FRALLE / KOLLEGAN</span><h1>Kön</h1></header>
   <p>Prioriterar frågor och föreslår mottagarteams utifrån deras egna förmågeanmälningar.</p>
   <p id="connection" role="status">Hämtar Köns status…</p>
-  <h2 id="queue-heading">Väntande frågor</h2>
-  <div id="questions" aria-live="polite"></div>
+  <p id="statistics"></p>
+  <p id="coordination" class="note"></p>
+  <div class="filters">
+    <label>Frågare <select id="requester-filter"><option value="">Alla frågare</option></select></label>
+    <label>Status <select id="stage-filter">
+      <option value="">Alla aktiva</option><option>väntar</option><option>påbörjad</option>
+      <option>väntar på granskning</option><option>granskat</option>
+      <option value="utan-framsteg">Utan framsteg i minst 5 min</option>
+    </select></label>
+  </div>
+  <h2 id="queue-heading">Aktiva frågor</h2>
+  <div id="questions"></div>
   <h2>Senast besvarade</h2>
   <ul id="completed"></ul>
+  <h2>Återkallade frågor</h2>
+  <ul id="cancelled"></ul>
   <div id="errors" role="alert"></div>
   <h2>Anmälda förmågor</h2>
   <ul id="capabilities"></ul>
   <p class="note">En fråga per frågare och varv. Inom din egen kö prioriteras brådskande och äldre frågor.
     Äldre frågor får två extra prioritetspoäng per minut.
-    Kön ger vägledning, men stoppar inte de andra förmågornas flöden.</p>
+    Fem minuter utan nytt steg markeras; det är en observation, inte ett bekräftat fel.
+    Max 10 aktiva frågor per frågare. Återkalla en ännu ej påbörjad fråga på Torget:
+    <code>@fralle återkalla HÄNDELSE-ID</code>, med samma angivna frågarnamn.
+    Namnkontroll är inte verifierad identitet.</p>
 </body>
 </html>

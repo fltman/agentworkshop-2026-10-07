@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sinch-aktien</title>
+<style>
+  :root { --bg: #0f1420; --kort: #182033; --text: #e8ecf4; --dim: #8a94a8; --upp: #2ecc71; --ned: #ff5c5c; --linje: #4da3ff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
+  h1 { margin: 0; font-size: 1.4rem; font-weight: 600; }
+  .under { color: var(--dim); font-size: .9rem; }
+  .pris { display: flex; align-items: baseline; gap: 12px; margin: 12px 0 4px; }
+  .pris b { font-size: 2.6rem; font-weight: 700; }
+  .upp { color: var(--upp); } .ned { color: var(--ned); }
+  .knappar { display: flex; flex-wrap: wrap; gap: 6px; margin: 18px 0 10px; }
+  .knappar button { background: var(--kort); color: var(--dim); border: 1px solid #2a3550; border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; }
+  .knappar button.vald { color: var(--text); border-color: var(--linje); }
+  .diagram { position: relative; background: var(--kort); border-radius: 10px; height: 360px; }
+  canvas { width: 100%; height: 100%; display: block; }
+  #tips { position: absolute; pointer-events: none; background: #0b0f18e6; border: 1px solid #2a3550; border-radius: 6px; padding: 6px 8px; font-size: .85rem; display: none; white-space: nowrap; }
+  .fakta { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 16px; }
+  .fakta div { background: var(--kort); border-radius: 8px; padding: 10px 12px; }
+  .fakta span { display: block; color: var(--dim); font-size: .8rem; }
+  .fel { color: var(--ned); margin-top: 12px; }
+  footer { margin-top: 18px; color: var(--dim); font-size: .8rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="namn">Sinch AB</h1>
+  <div class="under" id="borsen">SINCH.ST</div>
+  <div class="pris"><b id="pris">–</b><span id="andring"></span></div>
+  <div class="under" id="tid"></div>
+
+  <div class="knappar" id="knappar"></div>
+  <div class="diagram"><canvas id="c"></canvas><div id="tips"></div></div>
+  <div class="under" id="period" style="margin-top:8px"></div>
+
+  <div class="fakta" id="fakta"></div>
+  <div class="fel" id="fel"></div>
+  <footer>Data från Yahoo Finance, kan vara fördröjd cirka 15 minuter. Uppdateras varje minut.</footer>
+</main>
+<script>
+const INTERVALL = [['1d', '1 dag'], ['5d', '5 dagar'], ['1mo', '1 mån'], ['6mo', '6 mån'], ['ytd', 'I år'], ['1y', '1 år'], ['5y', '5 år'], ['max', 'Max']];
+let range = '1y', data = null;
+const $ = (id) => document.getElementById(id);
+const kr = (v, d = 2) => v == null ? '–' : v.toLocaleString('sv-SE', { minimumFractionDigits: d, maximumFractionDigits: d });
+const datum = (t) => new Date(t).toLocaleString('sv-SE', ['1d', '5d'].includes(range)
+  ? { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' } : { year: 'numeric', month: 'short', day: 'numeric' });
+
+$('knappar').innerHTML = INTERVALL.map(([r, t]) => `<button data-r="${r}">${t}</button>`).join('');
+$('knappar').onclick = (e) => { if (e.target.dataset.r) { range = e.target.dataset.r; ladda(); } };
+
+async function ladda() {
+  document.querySelectorAll('#knappar button').forEach((b) => b.classList.toggle('vald', b.dataset.r === range));
+  try {
+    const svar = await fetch(`/api/chart?range=${range}`);
+    const d = await svar.json();
+    if (!svar.ok) throw new Error(d.fel || svar.status);
+    data = d; $('fel').textContent = '';
+    visa();
+  } catch (err) { $('fel').textContent = `Kunde inte hämta kursen: ${err.message}`; }
+}
+
+function visa() {
+  const m = data.meta, p = data.punkter;
+  $('namn').textContent = m.namn || 'Sinch AB';
+  $('borsen').textContent = `${m.symbol} · ${m.borsen} · ${m.valuta}`;
+  $('pris').textContent = kr(m.pris);
+  $('tid').textContent = `Senast ${new Date(m.tid).toLocaleString('sv-SE')}`;
+
+  // Förändring över vald period, från första punkten i serien.
+  const forst = p.length ? p[0].pris : m.foregaende;
+  const diff = m.pris - forst, proc = forst ? diff / forst * 100 : 0;
+  $('andring').className = diff >= 0 ? 'upp' : 'ned';
+  $('andring').textContent = `${diff >= 0 ? '+' : ''}${kr(diff)} (${diff >= 0 ? '+' : ''}${kr(proc)} %)`;
+  $('period').textContent = `Förändring ${INTERVALL.find(([r]) => r === range)[1].toLowerCase()}`;
+
+  $('fakta').innerHTML = [
+    ['Dagens högsta', kr(m.dagHog)], ['Dagens lägsta', kr(m.dagLag)],
+    ['52 v högsta', kr(m.hog52)], ['52 v lägsta', kr(m.lag52)],
+    ['Volym idag', m.volym == null ? '–' : m.volym.toLocaleString('sv-SE')],
+    ['Periodens högsta', kr(Math.max(...p.map((x) => x.pris)))], ['Periodens lägsta', kr(Math.min(...p.map((x) => x.pris)))],
+  ].map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('');
+  rita();
+}
+
+const c = $('c'), ctx = c.getContext('2d');
+const MARG = { v: 56, h: 12, o: 14, u: 26 };
+let skala = null;
+
+function rita(hover) {
+  if (!data) return;
+  const dpr = window.devicePixelRatio || 1, B = c.clientWidth, H = c.clientHeight;
+  c.width = B * dpr; c.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, B, H);
+  const p = data.punkter;
+  if (p.length < 2) return;
+  const min = Math.min(...p.map((x) => x.pris)), max = Math.max(...p.map((x) => x.pris)), pad = (max - min) * 0.08 || 1;
+  const lo = min - pad, hi = max + pad;
+  const x = (i) => MARG.v + (B - MARG.v - MARG.h) * i / (p.length - 1);
+  const y = (v) => MARG.o + (H - MARG.o - MARG.u) * (1 - (v - lo) / (hi - lo));
+  skala = { x, y, B, H };
+
+  ctx.font = '11px system-ui'; ctx.fillStyle = '#8a94a8'; ctx.strokeStyle = '#26304a'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const v = lo + (hi - lo) * i / 4, yy = y(v);
+    ctx.beginPath(); ctx.moveTo(MARG.v, yy); ctx.lineTo(B - MARG.h, yy); ctx.stroke();
+    ctx.fillText(kr(v), 6, yy + 4);
+  }
+  ctx.textAlign = 'center';
+  for (let i = 0; i < 5; i++) {
+    const k = Math.round((p.length - 1) * i / 4);
+    ctx.fillText(datum(p[k].t).replace(/ \d{2}:\d{2}$/, ''), Math.min(Math.max(x(k), 40), B - 40), H - 8);
+  }
+  ctx.textAlign = 'left';
+
+  const upp = p[p.length - 1].pris >= p[0].pris, farg = upp ? '#2ecc71' : '#ff5c5c';
+  const grad = ctx.createLinearGradient(0, MARG.o, 0, H - MARG.u);
+  grad.addColorStop(0, upp ? '#2ecc7155' : '#ff5c5c55'); grad.addColorStop(1, '#00000000');
+  ctx.beginPath(); p.forEach((pt, i) => i ? ctx.lineTo(x(i), y(pt.pris)) : ctx.moveTo(x(i), y(pt.pris)));
+  ctx.lineTo(x(p.length - 1), H - MARG.u); ctx.lineTo(x(0), H - MARG.u); ctx.closePath();
+  ctx.fillStyle = grad; ctx.fill();
+  ctx.beginPath(); p.forEach((pt, i) => i ? ctx.lineTo(x(i), y(pt.pris)) : ctx.moveTo(x(i), y(pt.pris)));
+  ctx.strokeStyle = farg; ctx.lineWidth = 2; ctx.stroke();
+
+  if (hover != null) {
+    const pt = p[hover], hx = x(hover), hy = y(pt.pris);
+    ctx.strokeStyle = '#8a94a8'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(hx, MARG.o); ctx.lineTo(hx, H - MARG.u); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = farg; ctx.beginPath(); ctx.arc(hx, hy, 4, 0, Math.PI * 2); ctx.fill();
+    const tips = $('tips');
+    tips.innerHTML = `<b>${kr(pt.pris)} ${data.meta.valuta}</b><br>${datum(pt.t)}${pt.volym ? `<br>Volym ${pt.volym.toLocaleString('sv-SE')}` : ''}`;
+    tips.style.display = 'block';
+    tips.style.left = `${Math.min(hx + 10, B - tips.offsetWidth - 4)}px`; tips.style.top = `${Math.max(hy - 50, 4)}px`;
+  }
+}
+
+c.onmousemove = (e) => {
+  if (!skala) return;
+  const n = data.punkter.length, r = c.getBoundingClientRect();
+  const i = Math.round((e.clientX - r.left - MARG.v) / (skala.B - MARG.v - MARG.h) * (n - 1));
+  rita(Math.max(0, Math.min(n - 1, i)));
+};
+c.onmouseleave = () => { $('tips').style.display = 'none'; rita(); };
+window.onresize = () => rita();
+
+ladda();
+setInterval(ladda, 60_000);
+</script>
+</body>
+</html>
