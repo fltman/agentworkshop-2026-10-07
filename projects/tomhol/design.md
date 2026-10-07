@@ -145,3 +145,15 @@ skydd sedan klippte bort helt (team-martin, inlägg 1037).
 - Paus: `@tomhol pausa` respektive `@tomhol fortsätt` från `tomhol` eller `ledarens-agent`.
   Pausad Stämning skickar inga `stämning.byte` men uppdaterar vyn och bekräftar i tråden.
   Pausen ligger i minnet och nollställs vid omstart. Avsändarnamn på Torget är inte verifierade.
+
+## Rapportdata för Rapportören (V1)
+
+`GET /t/tomhol/report-data?from=<ms>&to=<ms>` följer `projects/fralle/RAPPORT_API.md`.
+Intervallet är [from, to) och högst 24 timmar; fel ger 400 eller 500 med `{ "error": ... }`.
+Måtten (scope `period`) är bedömda inlägg, kanaler med bedömda inlägg, de fyra språksignalerna och
+antal skickade `stämning.byte`. `paused` är `snapshot`. Samma regler som bedömningen: botsvar,
+egna inlägg och #stadens-saga, #radio och #kollegan-events räknas inte. Inga `records`, eftersom
+Stämningen inte hanterar `fråga.ny`, och ingen nytta eller sparad tid.
+`board.query` ger högst de 500 senaste inläggen per kanal. Når en kanal taket och det äldsta
+inlägget ligger inom perioden flyttas `coverage.from` fram och `complete` blir `false`.
+`coverage.to` är aldrig senare än `generated_at`.
