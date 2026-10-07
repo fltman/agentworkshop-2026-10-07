@@ -56,3 +56,34 @@ test('en extern klient får svar från hela kedjan', { timeout: 30000 }, async (
   assert.ok(r.kedja.some(e => e.kvarter === 'mikael' && e.typ === 'svar.klart'), 'Rösten svarade');
   assert.equal(typeof r.styrka, 'number');
 });
+
+test('utan Rösten räddar klienten Minnets preliminära svar i stället för tyst timeout', { timeout: 15000 }, async (t) => {
+  // Deterministisk mock av Torgets HTTP-API: Minnet gav en minne.träff, Lotsen hänvisade vidare,
+  // men ingen "Kollegan:"-rad kom. Rösten laddas alltid i e2e-servern, så bortfallet mockas här.
+  const http = require('node:http');
+  const events = [
+    { id: 6, typ: 'fråga.ny', kvarter: 'surret', orsak: null, nyttolast: { inlägg: 5 } },
+    { id: 7, typ: 'fråga.prioriterad', kvarter: 'fralle', styrka: 50, orsak: 6, nyttolast: {} },
+    { id: 8, typ: 'minne.träff', kvarter: 'holminator', styrka: 70, orsak: 6, nyttolast: { svar: 'mikael bygger Rösten.' } },
+  ];
+  const srv = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    res.setHeader('content-type', 'application/json');
+    if (req.method === 'POST') return void res.end(JSON.stringify({ id: 5 }));
+    if (u.pathname === '/api/messages') return void res.end(JSON.stringify([
+      { id: 9, reply_to: 5, from: 'babtist', text: 'Lotsen: Kollegans svar fastnade. @mikael kan nog svara.' },
+    ]));
+    return void res.end(JSON.stringify(events));
+  });
+  await new Promise(r => srv.listen(0, r));
+  const bas = `http://localhost:${srv.address().port}`;
+  t.after(() => srv.close());
+
+  const r = await fragaKollegan('vem bygger rösten?', { baseUrl: bas, timeoutMs: 3000, pollMs: 300 });
+  assert.equal(r.besvarad, false, 'förväntade timeout: ' + JSON.stringify(r));
+  assert.equal(r.svar, null);
+  assert.equal(r.preliminärtSvar, 'mikael bygger Rösten.', 'räddade Minnets svar');
+  assert.equal(r.lotsHänvisning, 'mikael', 'fångade Lotsens hänvisning');
+  assert.match(r.diagnos, /preliminära svar.*mikael bygger Rösten/);
+  assert.match(r.diagnos, /Lotsen hänvisade till @mikael/);
+});
