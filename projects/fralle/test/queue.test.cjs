@@ -355,8 +355,8 @@ test('caps pending questions at 100 without evicting existing questions', () => 
   assert.equal(sent.length, 100);
 });
 
-function lifecycle(id, typ) {
-  const event = { id: 30000 + events.length, ts: Date.now(), typ, kvarter: 'mikael', nyttolast: { fråga_id: id } };
+function lifecycle(id, typ, overrides = {}) {
+  const event = { id: 30000 + events.length, ts: Date.now(), typ, kvarter: 'mikael', nyttolast: { fråga_id: id }, ...overrides };
   events.push(event);
   plugin.onEvent(event, context);
 }
@@ -373,6 +373,160 @@ async function api(path, body, method = body ? 'POST' : 'GET') {
 function voice() {
   messages.push({ id: 96, from: 'mikael', text: 'mikael tar förmågan Rösten.' });
 }
+
+test('attention begins at exactly 300 seconds without emitting or changing fair order', t => {
+  let now = 1700000000000;
+  t.mock.method(Date, 'now', () => now);
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  plugin.onEvent(fromRequester(101, 'Bo'), context);
+  const order = status().kö.map(item => item.id);
+  now += 299999;
+  assert.equal(status().statistik.utan_framsteg, 0);
+  now++;
+  const result = status();
+  assert.equal(result.statistik.utan_framsteg_gräns_sek, 300);
+  assert.equal(result.statistik.utan_framsteg, 2);
+  assert.ok(result.kö.every(item => item.uppmärksamhet && item.utan_framsteg_sek === 300));
+  assert.deepEqual(result.kö.map(item => item.id), order);
+  assert.equal(result.kö[0].senaste_observation.typ, 'fråga.ny');
+  assert.equal(sent.length, 2);
+  assert.equal(result.fel.length, 0);
+});
+
+test('forward progress resets attention, not total question age', t => {
+  let now = 1700000000000;
+  t.mock.method(Date, 'now', () => now);
+  plugin.onEvent(fromRequester(100, 'Anna', 'Fråga', now - 1200000), context);
+  assert.equal(status().kö[0].uppmärksamhet, true);
+  lifecycle(100, 'minne.träff');
+  let item = status().kö[0];
+  assert.equal(item.uppmärksamhet, false);
+  assert.equal(item.väntetid_sek, 1200);
+  assert.equal(item.utan_framsteg_sek, 0);
+  now += 300000;
+  assert.equal(status().kö[0].uppmärksamhet, true);
+  lifecycle(100, 'svar.utkast');
+  item = status().kö[0];
+  assert.equal(item.uppmärksamhet, false);
+  assert.equal(item.framsteg.typ, 'svar.utkast');
+  assert.match(item.nästa_steg, /Ingen granskning/);
+  lifecycle(100, 'svar.granskat');
+  assert.match(status().kö[0].nästa_steg, /inget färdigt svar/);
+  answer(100);
+  assert.equal(status().statistik.utan_framsteg, 0);
+});
+
+test('same or lower stages and delayed observations never hide lack of progress', t => {
+  let now = 1700000000000;
+  t.mock.method(Date, 'now', () => now);
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  lifecycle(100, 'svar.utkast');
+  const progress = status().kö[0].framsteg;
+  now += 300000;
+  lifecycle(100, 'minne.träff');
+  lifecycle(100, 'svar.utkast');
+  const latest = status().kö[0].senaste_observation;
+  lifecycle(100, 'sammanfattning.klar', { ts: now - 60000 });
+  const item = status().kö[0];
+  assert.equal(item.steg, 'väntar på granskning');
+  assert.equal(item.uppmärksamhet, true);
+  assert.deepEqual(item.framsteg, progress);
+  assert.deepEqual(item.senaste_observation, latest);
+});
+
+test('reservation renewal does not reset the five-minute progress clock', async t => {
+  let now = 1700000000000;
+  t.mock.method(Date, 'now', () => now);
+  voice();
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  await api('/claim', { fråga_id: 100, team: 'mikael' });
+  const progress = status().kö[0].framsteg;
+  assert.equal(progress.typ, 'reservation');
+  assert.equal(progress.id, null);
+  for (let minute = 1; minute <= 5; minute++) {
+    now += 60000;
+    assert.equal((await api('/claim', { fråga_id: 100, team: 'mikael' })).code, 200);
+  }
+  const item = status().kö[0];
+  assert.equal(item.uppmärksamhet, true);
+  assert.deepEqual(item.framsteg, progress);
+  assert.match(item.turförklaring, /redan reserverad/);
+  assert.equal(sent.length, 1);
+});
+
+test('progress clock persists without bus history; missing legacy timestamps stay unknown', t => {
+  let now = 1700000000000;
+  t.mock.method(Date, 'now', () => now);
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  lifecycle(100, 'svar.utkast');
+  const progress = status().kö[0].framsteg;
+  now += 300000;
+  events = [];
+  plugin.init(context);
+  assert.equal(status().kö[0].uppmärksamhet, true);
+  assert.deepEqual(status().kö[0].framsteg, progress);
+  const stored = JSON.parse(readFileSync(join(temp, 'queue.json')));
+  delete stored.questions[0].framsteg;
+  delete stored.questions[0].senaste_observation;
+  writeFileSync(join(temp, 'queue.json'), JSON.stringify(stored));
+  plugin.init(context);
+  const legacy = status().kö[0];
+  assert.equal(legacy.utan_framsteg_sek, null);
+  assert.equal(legacy.uppmärksamhet, false);
+  assert.equal(legacy.senaste_observation, null);
+});
+
+test('repeated expired reservations cannot hide a question that makes no forward progress', async t => {
+  let now = 1700000000000;
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(console, 'error', () => {});
+  voice();
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  await api('/claim', { fråga_id: 100, team: 'mikael' });
+  const progress = status().kö[0].framsteg;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    now += 120000;
+    assert.equal((await api('/claim', { fråga_id: 100, team: 'mikael' })).code, 200);
+  }
+  now += 60000;
+  const item = status().kö[0];
+  assert.equal(item.uppmärksamhet, true);
+  assert.deepEqual(item.framsteg, progress);
+  assert.equal(item.senaste_observation.ts, now - 60000);
+  assert.equal(JSON.parse(readFileSync(join(temp, 'queue.json'))).turn, 3);
+});
+
+test('fair explanations use real turns, requester rounds and priority ageing', t => {
+  const now = 1700000000000;
+  t.mock.method(Date, 'now', () => now);
+  plugin.onEvent(fromRequester(100, 'Anna', 'Normal', now - 900000), context);
+  plugin.onEvent(fromRequester(101, 'Anna', 'Akut', now - 900000), context);
+  plugin.onEvent(fromRequester(102, 'Bo', 'Normal', now - 900000), context);
+  plugin.onEvent(fromRequester(103, 'Bo', 'Normal', now - 900000), context);
+  let items = status().kö;
+  assert.deepEqual(items.map(item => item.id), [101, 102, 100, 103]);
+  assert.deepEqual(items.map(item => item.varv), [1, 1, 2, 2]);
+  assert.match(items[0].turförklaring, /Anna går före Bo.*äldsta väntande frågan/);
+  assert.match(items[0].prioritetsförklaring, /Prioritet 99: bas 80 \+ 30 väntetidspoäng/);
+  assert.match(items[0].prioritetsförklaring, /inom Annas egen kö/);
+  answer(101);
+  items = status().kö;
+  assert.equal(items[0].id, 102);
+  assert.match(items[0].turförklaring, /Bo går före Anna.*ännu inte fått en registrerad tur/);
+  answer(102);
+  items = status().kö;
+  assert.equal(items[0].id, 100);
+  assert.match(items[0].turförklaring, /Anna går före Bo.*senaste registrerade tur tidigare/);
+});
+
+test('corrupt progress history is surfaced as unavailable storage', () => {
+  plugin.onEvent(question(), context);
+  const stored = JSON.parse(readFileSync(join(temp, 'queue.json')));
+  stored.questions[0].framsteg.ts = 'not a timestamp';
+  writeFileSync(join(temp, 'queue.json'), JSON.stringify(stored));
+  assert.throws(() => plugin.init(context), /Ogiltig framstegshistorik/);
+  assert.match(status(503).error, /Ogiltig framstegshistorik/);
+});
 
 test('per-requester limit includes processing questions and leaves capacity for others', () => {
   for (let i = 0; i < 10; i++) plugin.onEvent(fromRequester(100 + i, 'Anna'), context);
@@ -642,6 +796,11 @@ test('real HTTP queue reserves fair turns, tracks lifecycle and persists cancell
   }
   assert.equal(result.kö[0]?.id, input.id, logs);
   assert.equal(result.kö[0].mottagare[0].team, 'minneslaget');
+  assert.equal(result.statistik.utan_framsteg_gräns_sek, 300);
+  assert.equal(result.kö[0].uppmärksamhet, false);
+  assert.equal(result.kö[0].framsteg.id, input.id);
+  assert.match(result.kö[0].turförklaring, /Varv 1/);
+  assert.match(result.kö[0].prioritetsförklaring, /inom Annas egen kö/);
   const bus = await (await fetch(base + '/api/events?typ=' + encodeURIComponent('fråga.prioriterad'))).json();
   assert.equal(bus.length, 1);
   assert.equal(bus[0].djup, 2);
@@ -671,12 +830,14 @@ test('real HTTP queue reserves fair turns, tracks lifecycle and persists cancell
   assert.deepEqual(await read('/t/fralle/next'), { fråga: null, upptagen: true });
   const draft = await post('/api/events', { from: 'mikael', typ: 'svar.utkast', nyttolast: { fråga_id: input.id }, orsak: bus[0].id });
   result = await until('/t/fralle/status', value => value.kö.find(item => item.id === input.id)?.steg === 'väntar på granskning');
+  assert.equal(result.kö.find(item => item.id === input.id).framsteg.id, draft.id);
   const exited = once(processHandle, 'exit');
   processHandle.kill();
   await exited;
   base = await start();
   const restored = await (await fetch(base + '/t/fralle/status')).json();
-  assert.deepEqual(restored.kö.map(({ väntetid_sek, ...item }) => item), result.kö.map(({ väntetid_sek, ...item }) => item));
+  assert.deepEqual(restored.kö.map(({ väntetid_sek, utan_framsteg_sek, ...item }) => item),
+    result.kö.map(({ väntetid_sek, utan_framsteg_sek, ...item }) => item));
   assert.deepEqual(restored.återkallade, result.återkallade);
   assert.deepEqual(await read('/t/fralle/next'), { fråga: null, upptagen: true });
   const review = await post('/api/events', { from: 'granskaren', typ: 'svar.granskat', nyttolast: { fråga_id: input.id }, orsak: draft.id });

@@ -21,6 +21,7 @@
   <ul id="lista"><li class="tomt">inga sammanfattningar ännu</li></ul>
 </div>
 <script>
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 fetch('/t/marcuslind/portratt').then(r => r.json()).then(p => {
   if (p && p.url) { const img = document.getElementById('portratt'); img.src = p.url; img.style.display = 'block'; }
 }).catch(() => {});
@@ -29,8 +30,8 @@ const visa = () => fetch('/t/marcuslind/sammanfattningar').then(r => r.json()).t
   if (!poster.length) { el.innerHTML = '<li class="tomt">inga sammanfattningar ännu</li>'; return; }
   el.innerHTML = poster.slice(0, 10).map(p => `
     <li>
-      <div class="rad1"><span class="kanal">#${p.kanal}</span><span class="antal">${p.antalInlägg} inlägg</span></div>
-      <div class="text">${p.sammanfattning}</div>
+      <div class="rad1"><span class="kanal">#${esc(p.kanal)}</span><span class="antal">${esc(p.antalInlägg)} inlägg</span></div>
+      <div class="text">${esc(p.sammanfattning)}</div>
     </li>`).join('');
 }).catch(() => {});
 visa(); setInterval(visa, 8000);

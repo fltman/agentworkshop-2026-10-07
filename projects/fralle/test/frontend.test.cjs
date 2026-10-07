@@ -33,12 +33,16 @@ function data(override = {}) {
   const result = { förmågor: [], kö: [], besvarade: [], återkallade: [], fel: [], ...override };
   result.kö = result.kö.map(item => ({
     steg: 'väntar', väntetid_sek: 0, mottagare: [], motivering: 'Normal prioritet',
+    senaste_observation: null, utan_framsteg_sek: null, uppmärksamhet: false,
+    turförklaring: 'En fråga per frågare och varv.', prioritetsförklaring: 'Bas 50.',
+    nästa_steg: 'Inget påbörjat arbete har observerats.',
     utskick: { försök: 1, nästa_försök: null, fel: null }, ...item,
   }));
   result.statistik = {
     aktiva: result.kö.length, väntande: result.kö.length, påbörjade: 0, granskning: 0,
     äldsta_väntetid_sek: 0, frågare: new Set(result.kö.map(item => item.frågare)).size,
-    senaste_reservation: null, ...override.statistik,
+    senaste_reservation: null, utan_framsteg: result.kö.filter(item => item.uppmärksamhet).length,
+    utan_framsteg_gräns_sek: 300, ...override.statistik,
   };
   return result;
 }
@@ -144,4 +148,45 @@ test('retry schedule, reservation and cancellation history are visible', async (
   assert.ok(ids.questions.children[0].children.some(item => /Reserverad av mikael/.test(item.textContent)));
   assert.match(ids.cancelled.children[0].textContent, /Avbruten/);
   assert.match(ids.coordination.textContent, /använt reservation/);
+});
+
+test('stalled rows expose observations and actual queue reasons without diagnosing a fault', async () => {
+  const hostile = '<img src=x onerror=alert(1)>';
+  const state = data({
+    kö: [
+      { id: 100, köplats: 1, prioritet: 60, ts: Date.now(), fråga: 'Fråga', frågare: 'Bo',
+        uppmärksamhet: true, utan_framsteg_sek: 300, steg: 'väntar på granskning',
+        senaste_observation: { id: 200, typ: 'svar.utkast', ts: Date.now(), kvarter: 'mikael' },
+        turförklaring: 'Bo går före Anna eftersom Anna fått en senare tur.',
+        prioritetsförklaring: hostile },
+      { id: 101, köplats: 2, prioritet: 50, ts: Date.now(), fråga: 'Annan', frågare: 'Anna' },
+    ],
+  });
+  const { ids } = await run(async () => ({ ok: true, json: async () => state }));
+  const card = ids.questions.children[0];
+  assert.equal(card.className, 'stalled');
+  assert.match(card.children[0].textContent, /Länge utan framsteg/);
+  assert.ok(card.children.some(item => /Bo går före Anna/.test(item.textContent)));
+  assert.ok(card.children.some(item => item.textContent === hostile));
+  assert.ok(card.children.some(item => /svar.utkast · händelse 200/.test(item.textContent)));
+  assert.ok(card.children.some(item => /inte ett bekräftat fel/.test(item.textContent)));
+  assert.match(ids.statistics.textContent, /1 utan framsteg i minst 5 min/);
+  ids['stage-filter'].value = 'utan-framsteg';
+  ids['stage-filter'].listeners.change();
+  assert.equal(ids.questions.children.length, 1);
+  ids['requester-filter'].value = 'anna';
+  ids['requester-filter'].listeners.change();
+  assert.match(ids.questions.children[0].textContent, /Inga frågor matchar/);
+});
+
+test('unknown historical clocks and local reservations are labelled honestly', async () => {
+  const state = data({
+    kö: [{ id: 100, köplats: 1, prioritet: 50, ts: Date.now(), fråga: 'Fråga', frågare: 'Anna',
+      senaste_observation: { id: null, typ: 'reservation', ts: null, kvarter: 'mikael' } }],
+  });
+  const { ids } = await run(async () => ({ ok: true, json: async () => state }));
+  const card = ids.questions.children[0];
+  assert.ok(card.children.some(item => /lokal reservation · tid okänd/.test(item.textContent)));
+  assert.ok(card.children.some(item => /ingen säker varningsbedömning/.test(item.textContent)));
+  assert.notEqual(card.className, 'stalled');
 });

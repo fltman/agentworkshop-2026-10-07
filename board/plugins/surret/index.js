@@ -3,7 +3,8 @@
 // Följer sedan kedjan (orsak) som andra förmågor bygger på frågan, så rutan på /staden kan visa
 // vart frågan tog vägen. Har ingen reagerat på tre minuter skickar Örat fråga.obesvarad.
 // fråga.ny bär frågans språk (sv/en). Samma fråga inom fem minuter får ingen ny kedja, bara en
-// hänvisning till den första. Ateljens bild.klar till surret visas som porträtt i rutan.
+// hänvisning till den första. Ateljens bild.klar till surret visas som porträtt i rutan när den
+// öppnas fristående (på /staden visar ramen redan porträttet).
 //
 //   GET /t/surret/fragor   → senaste frågorna med sina kedjor
 //   GET /t/surret/status   → siffror
@@ -136,7 +137,7 @@ function las(e, team) {
   // Alla svar.* räknas, även svar.utkast: Rösten skickar det innan svaret postas på Torget.
   if (/^svar\./.test(e.typ) && e.kvarter !== team) st.svarsposter.add(e.kvarter);
   const n = e.nyttolast && typeof e.nyttolast === 'object' ? e.nyttolast : {};
-  if (e.typ === 'bild.klar' && n.till === team && typeof n.url === 'string' && /^\/t\/[\w-]+\//.test(n.url)) {
+  if (e.typ === 'bild.klar' && n.till === team && n.namn === 'portratt' && typeof n.url === 'string' && /^\/t\/[\w-]+\//.test(n.url)) {
     st.portratt = { url: n.url, prompt: String(n.prompt || '').slice(0, 300), ts: e.ts };
     return;
   }

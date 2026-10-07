@@ -43,26 +43,46 @@ function render(state) {
   requesterFilter.value = names.has(selected) ? selected : '';
   const filtered = state.kö.filter(item =>
     (!requesterFilter.value || requesterKey(item.frågare) === requesterFilter.value) &&
-    (!stageFilter.value || item.steg === stageFilter.value));
+    (!stageFilter.value || (stageFilter.value === 'utan-framsteg' ? item.uppmärksamhet : item.steg === stageFilter.value)));
   document.getElementById('queue-heading').textContent = `Aktiva frågor (${filtered.length} av ${state.kö.length})`;
   const stats = state.statistik;
   document.getElementById('statistics').textContent =
     `${stats.aktiva} aktiva · ${stats.väntande} väntande · ${stats.påbörjade} påbörjade · ` +
-    `${stats.granskning} i granskning · ${stats.frågare} frågare · äldsta väntetid ${duration(stats.äldsta_väntetid_sek)}`;
+    `${stats.granskning} i granskning · ${stats.frågare} frågare · äldsta väntetid ${duration(stats.äldsta_väntetid_sek)} · ` +
+    `${stats.utan_framsteg} utan framsteg i minst ${duration(stats.utan_framsteg_gräns_sek)}`;
   document.getElementById('coordination').textContent = stats.senaste_reservation
-    ? 'Rösten har använt reservation. Bara en fråga kan reserveras åt gången; observerad aktivitet visas även från andra förmågor.'
+    ? 'Rösten har använt reservation. Det bevisar inte att alla svar följer Kön: Rösten måste respektera avslag och förnya före publicering.'
     : 'Rösten har ännu inte reserverat någon fråga. Köns ordning är därför fortfarande vägledande.';
   const cards = filtered.map(item => {
-    const card = element('details', '');
+    const card = element('details', '', item.uppmärksamhet ? 'stalled' : '');
     card.open = expanded.has(item.id);
     card.addEventListener('toggle', () => {
       if (card.open) expanded.add(item.id);
       else expanded.delete(item.id);
     });
     const time = new Date(item.ts).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
-    card.append(element('summary', `#${item.köplats} · ${item.frågare} · ${item.steg} · ${duration(item.väntetid_sek)} · ${item.fråga}`));
+    const warning = item.uppmärksamhet ? 'Länge utan framsteg · ' : '';
+    card.append(element('summary', `${warning}#${item.köplats} · ${item.frågare} · ${item.steg} · ${duration(item.väntetid_sek)} · ${item.fråga}`));
     card.append(element('p', `Prioritet ${item.prioritet} · ${time} · Händelse ${item.id}`, 'meta'));
     card.append(element('strong', item.fråga));
+    card.append(element('p', item.turförklaring));
+    card.append(element('p', item.prioritetsförklaring));
+    const observation = item.senaste_observation;
+    if (observation) {
+      const observedTime = observation.ts === null ? 'tid okänd' : new Date(observation.ts).toLocaleTimeString('sv-SE');
+      const observedId = observation.id === null ? 'lokal reservation' : `händelse ${observation.id}`;
+      card.append(element('p', `Senast observerat: ${observation.typ} · ${observedId} · ${observedTime}` +
+        (observation.kvarter ? ` · @${observation.kvarter}` : ''), 'meta'));
+    } else {
+      card.append(element('p', 'Senaste observationens detaljer saknas i den äldre historiken.', 'meta'));
+    }
+    card.append(element('p', item.utan_framsteg_sek === null
+      ? 'Tid för senaste framsteget saknas; ingen säker varningsbedömning kan göras.'
+      : `${duration(item.utan_framsteg_sek)} sedan senaste framsteg.`, 'meta'));
+    card.append(element('p', item.nästa_steg));
+    if (item.uppmärksamhet) {
+      card.append(element('p', 'Markeringen beskriver uteblivna observerade framsteg, inte ett bekräftat fel. Ingen automatisk omstart görs.', 'warning'));
+    }
     for (const proposal of item.mottagare) {
       card.append(element('p', `@${proposal.team} · ${proposal.förmåga}`));
       card.append(element('p', proposal.motivering));
