@@ -83,6 +83,19 @@ function fail(st, message) {
   console.error('[tomhol]', message);
 }
 
+// Readable sentence for consumers such as Minnet and Rösten, which prefer nyttolast.rad over raw fields.
+function sentence(kanal, antal, signaler) {
+  const n = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+  const parts = [
+    signaler.fragor && n(signaler.fragor, 'fråga', 'frågor'),
+    signaler.hinder && n(signaler.hinder, 'hinder', 'hinder'),
+    signaler.uppskattning && n(signaler.uppskattning, 'uppskattning', 'uppskattningar'),
+    signaler.omtanke && n(signaler.omtanke, 'uttryck av omtanke', 'uttryck av omtanke'),
+  ].filter(Boolean);
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} och ${parts.at(-1)}` : parts[0] || 'inga tydliga språksignaler';
+  return `I #${kanal} de senaste 10 minuterna (${n(antal, 'inlägg', 'inlägg')}): ${list}. Det är språksignaler, inte känslor.`;
+}
+
 function assess(messages, kanal, now) {
   const recent = messages.filter(m =>
     m.channel === kanal && m.channel !== 'kollegan-events' &&
@@ -98,6 +111,7 @@ function assess(messages, kanal, now) {
     }
   }
   return {
+    rad: sentence(kanal, recent.length, signaler),
     kanal,
     fonster: { fran: new Date(now - WINDOW_MS).toISOString(), till: new Date(now).toISOString() },
     antalInlagg: recent.length,

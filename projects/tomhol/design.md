@@ -120,3 +120,11 @@ Endast frontend; backend och `stämning.byte` är oförändrade.
 Beslut: talsyntes framför ljudfil (ingen tillgång att distribuera eller
 licensiera); utlösning på nya markörer framför räknarökning, eftersom antalet
 i fönstret också minskar när gamla markörer rullar ut.
+
+## Läsbar rad i stämning.byte
+
+`nyttolast.rad` ligger först och är en mening utan JSON, till exempel
+”I #bygge de senaste 10 minuterna (20 inlägg): 12 frågor, 1 hinder,
+1 uppskattning och 1 uttryck av omtanke. Det är språksignaler, inte känslor.”
+Minnet och Rösten föredrar `rad`; utan den citerades rå JSON som Röstens
+skydd sedan klippte bort helt (team-martin, inlägg 1037).
