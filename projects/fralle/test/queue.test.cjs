@@ -26,6 +26,7 @@ beforeEach(() => {
       events: () => events,
       emit(typ, opts) {
         sent.push({ typ, ...opts });
+        if (events.find(event => event.id === opts.orsak)?.djup >= 6) return { error: 'maxdjup 6 nått' };
         if (failure) return { error: failure };
         const handelse = { id: 10000 + sent.length, typ, ts: Date.now(), kvarter: 'fralle', djup: 2, ...opts };
         events.push(handelse);
@@ -117,7 +118,7 @@ test('first claim wins role conflicts and a later sentence can switch roles', ()
   assert.equal(status().förmågor.find(item => item.förmåga === 'Minnet').team, 'holminator');
 });
 
-test('urgent questions go first, strength does not change priority, ties are FIFO', () => {
+test('within one requester urgent questions go first, strength is ignored, ties are FIFO', () => {
   const now = Date.now();
   plugin.onEvent(question({ id: 101, ts: now - 3000, styrka: 100 }), context);
   plugin.onEvent(question({ id: 102, ts: now - 2000, styrka: 0 }), context);
@@ -175,8 +176,9 @@ test('ignores own, duplicate and unrelated events', () => {
 
 test('reports missing question or max-depth and does not manufacture a root event', () => {
   expectError(question({ nyttolast: null }), /fråga.ny behöver/);
-  expectError(question({ id: 101, djup: 4 }), /Maxdjup/);
-  assert.equal(sent.length, 0);
+  expectError(question({ id: 101, djup: 6 }), /maxdjup 6/);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].orsak, 101);
   assert.equal(status().kö.length, 1);
 });
 
@@ -195,7 +197,7 @@ test('keeps payload below exact 2000-character wire limit including escaped inpu
     { id: 120, from: 'x'.repeat(40), text: 'Vi tar förmågan Minnet.' },
     { id: 121, from: 'y'.repeat(40), text: 'Vi tar förmågan Granskaren.' },
   ];
-  plugin.onEvent(question({ nyttolast: { fråga: 'minnet granska akut "' + '\\\n'.repeat(1000), kanal: 'a'.repeat(30), inlägg: 999 } }), context);
+  plugin.onEvent(question({ nyttolast: { fråga: 'minnet granska akut "' + '\\\n'.repeat(1000), frågare: '"'.repeat(40), kanal: 'a'.repeat(30), inlägg: 999 } }), context);
   assert.equal(sent[0].nyttolast.routning.length, 2);
   const wire = JSON.stringify({ typ: sent[0].typ, styrka: sent[0].styrka, nyttolast: sent[0].nyttolast, orsak: sent[0].orsak });
   assert.ok(wire.length <= 2000, `wire payload was ${wire.length} characters`);
@@ -210,6 +212,116 @@ test('restores queue and deduplication from persistent storage', () => {
   plugin.onEvent(root, context);
   assert.equal(sent.length, 1);
   assert.equal(JSON.parse(readFileSync(join(temp, 'queue.json'), 'utf8')).questions.length, 1);
+});
+
+function fromRequester(id, name, text = 'Vanlig fråga', ts = Date.now()) {
+  return question({ id, ts, nyttolast: { fråga: text, frågare: name } });
+}
+
+function answer(id, sequence = 1000 + id) {
+  const event = { id: sequence, ts: Date.now(), typ: 'svar.klart', kvarter: 'mikael', nyttolast: { fråga_id: id } };
+  events.push(event);
+  plugin.onEvent(event, context);
+}
+
+test('interleaves frequent requester with other requesters without dropping questions', () => {
+  const now = Date.now();
+  for (const [id, name] of [[100, 'A'], [101, 'A'], [102, 'A'], [103, 'B'], [104, 'C']]) {
+    plugin.onEvent(fromRequester(id, name, 'Vanlig fråga', now + id), context);
+  }
+  assert.deepEqual(status().kö.map(item => item.id), [100, 103, 104, 101, 102]);
+  assert.deepEqual(status().kö.map(item => item.köplats), [1, 2, 3, 4, 5]);
+  assert.equal(sent[4].nyttolast.frågare, 'C');
+  assert.equal(sent[4].nyttolast.köplats, 3);
+  assert.deepEqual(status().kö, status().kö);
+});
+
+test('remembering a completed turn prevents frequent requester moving first again', () => {
+  const now = Date.now();
+  for (const [id, name] of [[100, 'A'], [101, 'A'], [102, 'A'], [103, 'B'], [104, 'C']]) {
+    plugin.onEvent(fromRequester(id, name, 'Vanlig fråga', now + id), context);
+  }
+  answer(100);
+  assert.deepEqual(status().kö.map(item => item.id), [103, 104, 101, 102]);
+  plugin.onEvent(fromRequester(105, 'A'), context);
+  assert.equal(status().kö[0].frågare, 'B');
+  answer(103);
+  assert.equal(status().kö[0].frågare, 'C');
+  answer(104);
+  assert.equal(status().kö[0].frågare, 'A');
+});
+
+test('urgency only changes selection within the requester’s own turn', () => {
+  const now = Date.now();
+  plugin.onEvent(fromRequester(100, 'A', 'Vanlig fråga', now), context);
+  plugin.onEvent(fromRequester(101, 'A', 'Akut: hjälp', now + 1), context);
+  plugin.onEvent(fromRequester(102, 'B', 'Urgent: help', now + 2), context);
+  plugin.onEvent(fromRequester(103, 'A', 'Akut: mer hjälp', now + 3), context);
+  assert.deepEqual(status().kö.map(item => item.id), [101, 102, 103, 100]);
+  answer(101);
+  assert.equal(status().kö[0].id, 102);
+});
+
+test('requester names are case-insensitive but distinct Swedish names stay distinct', () => {
+  const now = Date.now();
+  plugin.onEvent(fromRequester(100, 'Åsa', 'Fråga', now), context);
+  plugin.onEvent(fromRequester(101, 'ÅSA', 'Fråga', now + 1), context);
+  plugin.onEvent(fromRequester(102, 'Asa', 'Fråga', now + 2), context);
+  assert.deepEqual(status().kö.map(item => item.id), [100, 102, 101]);
+});
+
+test('missing requesters recover the original sender or share one unknown bucket', () => {
+  messages.push({ id: 99, from: 'Originalfrågaren', text: '@kollegan hej' });
+  plugin.onEvent(question(), context);
+  assert.equal(status().kö[0].frågare, 'Originalfrågaren');
+  messages.pop();
+  const now = Date.now();
+  plugin.onEvent(question({ id: 101, ts: now, nyttolast: { fråga: 'Hej' } }), context);
+  plugin.onEvent(question({ id: 102, ts: now + 1, nyttolast: { fråga: 'Hej igen' } }), context);
+  plugin.onEvent(fromRequester(103, 'B', 'Hej', now + 2), context);
+  assert.deepEqual(status().kö.map(item => item.id), [100, 101, 103, 102]);
+});
+
+test('turn history survives restart and an old queue is migrated without losing questions', () => {
+  const now = Date.now();
+  plugin.onEvent(fromRequester(100, 'A', 'Fråga', now), context);
+  plugin.onEvent(fromRequester(101, 'A', 'Fråga', now + 1), context);
+  plugin.onEvent(fromRequester(102, 'B', 'Fråga', now + 2), context);
+  answer(100);
+  plugin.init(context);
+  assert.deepEqual(status().kö.map(item => item.id), [102, 101]);
+  const legacy = JSON.parse(readFileSync(join(temp, 'queue.json'), 'utf8'));
+  legacy.version = 1;
+  delete legacy.turn;
+  delete legacy.served;
+  for (const item of legacy.questions) delete item.frågare;
+  writeFileSync(join(temp, 'queue.json'), JSON.stringify(legacy));
+  plugin.init(context);
+  assert.equal(status().kö.length, 2);
+  assert.equal(status().besvarade.length, 1);
+  assert.ok(status().kö.every(item => item.frågare === '(okänd frågare)'));
+  assert.equal(JSON.parse(readFileSync(join(temp, 'queue.json'), 'utf8')).version, 2);
+});
+
+test('active requester turn history is not lost after more than 20 answers', () => {
+  const now = Date.now();
+  plugin.onEvent(fromRequester(100, 'A', 'Fråga', now), context);
+  plugin.onEvent(fromRequester(101, 'A', 'Fråga', now + 1), context);
+  for (let index = 0; index < 30; index++) {
+    plugin.onEvent(fromRequester(200 + index, 'User' + index, 'Fråga', now + 2 + index), context);
+  }
+  answer(100);
+  for (let index = 0; index < 25; index++) answer(200 + index);
+  assert.equal(status().besvarade.length, 20);
+  assert.equal(status().kö[0].frågare, 'User25');
+  plugin.init(context);
+  assert.equal(status().kö[0].frågare, 'User25');
+});
+
+test('bus owns the updated depth limit: a depth-four question can still be prioritized', () => {
+  plugin.onEvent(question({ djup: 4 }), context);
+  assert.equal(status().fel.length, 0);
+  assert.ok(status().kö[0].prioritetshändelse);
 });
 
 test('replays completed answers on restart and keeps latest 20 completions', () => {
@@ -283,7 +395,7 @@ test('real server reacts on bus, serves frontend and persists queue over restart
     return response.json();
   }
   const claim = await post('/api/messages', { from: 'minneslaget', channel: 'bygge', text: 'Team minneslaget tar förmågan Minnet.' });
-  const input = await post('/api/events', { from: 'orat', typ: 'fråga.ny', nyttolast: { fråga: 'Vem bygger minnet?', inlägg: claim.id, kanal: 'bygge' } });
+  const input = await post('/api/events', { from: 'orat', typ: 'fråga.ny', nyttolast: { fråga: 'Vem bygger minnet?', frågare: 'Anna', inlägg: claim.id, kanal: 'bygge' } });
   let result;
   for (let tries = 0; tries < 30; tries++) {
     result = await (await fetch(base + '/t/fralle/status')).json();
@@ -296,6 +408,7 @@ test('real server reacts on bus, serves frontend and persists queue over restart
   assert.equal(bus.length, 1);
   assert.equal(bus[0].djup, 2);
   assert.equal(bus[0].orsak, input.id);
+  assert.equal(bus[0].nyttolast.frågare, 'Anna');
   assert.equal(bus[0].nyttolast.mottagare[0], 'minneslaget');
   assert.equal(bus[0].nyttolast.routning[0].källinlägg, claim.id);
   for (const name of ['', 'app.js', 'style.css']) {

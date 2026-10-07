@@ -20,6 +20,8 @@ const MAX_EMIT_PER_MIN = 4;         // egen spärr, under serverns 6
 const HISTORIK_MAX = 180;
 const MPM_FULL = 8;                 // åtta inlägg i minuten räknas som full puls
 const BUSS = 'kollegan-events';     // bussens egen trafik är förmågornas, inte rummets
+const GLOM_FRAGA_MS = 20 * 60 * 1000; // en fråga som väntat så länge är inte längre aktuell
+const TRYCK_MAX_FRAGOR = 5;         // trycket mättas, en kö på trettio är inte trettio gånger värre
 
 const st = {
   msgs: [],            // {ts, channel} i fönstret
@@ -28,6 +30,7 @@ const st = {
   reaktioner: [],      // senaste puls.tryck vi skickat
   frammande: [],       // senaste händelser från andra kvarter som påverkat oss
   stamning: null,      // senaste stämning.byte från tomhol
+  portratt: null,      // {url, prompt} från ateljéns bild.klar
   sedda: new Set(),    // orsaks-id vi redan reagerat på (serverns gräns: 1 per orsak)
   senasteTempo: { ts: 0, styrka: -100 },
   emitLogg: [],
@@ -37,13 +40,27 @@ const st = {
 const nu = () => Date.now();
 const klamp = (n) => Math.max(0, Math.min(100, Math.round(n)));
 
+// Ett omnämnande är inte en fråga. Halva rummet skriver om Kollegan utan att fråga den något,
+// och de inläggen får inte bli en kö som trycker upp pulsen resten av dagen.
+// Örat (surret) äger frågedetektionen via fråga.ny; det här är bara en smal backup:
+// @kollegan ska stå som ett tilltal i början av ett kort inlägg.
+function arFraga(text) {
+  const t = String(text || '').trim();
+  if (t.length > 400) return false;
+  const i = t.search(/@kollegan\b/i);
+  return i >= 0 && i <= 30;
+}
+
 function stadaFonster(t = nu()) {
   const grans = t - FONSTER_MS;
   while (st.msgs.length && st.msgs[0].ts < grans) st.msgs.shift();
   if (st.historik.length > HISTORIK_MAX) st.historik.splice(0, st.historik.length - HISTORIK_MAX);
   if (st.reaktioner.length > 12) st.reaktioner.splice(0, st.reaktioner.length - 12);
   if (st.frammande.length > 12) st.frammande.splice(0, st.frammande.length - 12);
-  if (st.sedda.size > 500) st.sedda.clear();
+  for (const [id, f] of st.fragor) {
+    if (f.besvarad || t - f.ts > GLOM_FRAGA_MS) st.fragor.delete(id);
+  }
+  if (st.sedda.size > 500) st.sedda = new Set([...st.sedda].slice(-250));
 }
 
 function obesvarade(t = nu()) {
@@ -51,7 +68,7 @@ function obesvarade(t = nu()) {
   for (const [id, f] of st.fragor) {
     if (f.besvarad) continue;
     const vantat = t - f.ts;
-    if (vantat < OBESVARAD_MS) continue;
+    if (vantat < OBESVARAD_MS || vantat > GLOM_FRAGA_MS) continue;
     ut.push({ id, kanal: f.channel, fran: f.from, text: f.text, vantat_s: Math.round(vantat / 1000) });
   }
   return ut.sort((a, b) => b.vantat_s - a.vantat_s).slice(0, 8);
@@ -70,7 +87,7 @@ function mat(t = nu()) {
 
   const mpm = +(st.msgs.length / minuter).toFixed(2);
   const vantande = obesvarade(t);
-  const tryck = klamp(vantande.reduce((s, f) => s + Math.min(25, f.vantat_s / 12), 0));
+  const tryck = klamp(vantande.slice(0, TRYCK_MAX_FRAGOR).reduce((s, f) => s + Math.min(25, f.vantat_s / 12), 0));
   const tempo = klamp(mpm / MPM_FULL * 100);
 
   return {
@@ -81,7 +98,7 @@ function mat(t = nu()) {
     inlägg: st.msgs.length,
     fönster_min: minuter,
     hetaste: kanaler[0] ? kanaler[0].kanal : null,
-    kanaler: kanaler.slice(0, 8),
+    kanaler,                      // hel lista internt, kapas först när den skickas ut
     obesvarade: vantande,
     stämning: st.stamning,
   };
@@ -93,6 +110,33 @@ function ord(s) {
   if (s >= 30) return 'igång';
   if (s >= 12) return 'lugnt';
   return 'stilla';
+}
+
+// En färdig mening om rummet, så Rösten kan citera Pulsen utan att tolka våra siffror.
+// JSON-fälten är tal, men meningen är svenska: decimalkomma, inte punkt.
+const tal = (n) => String(n).replace('.', ',');
+const tillMinuter = (s) => Math.max(1, Math.round(s / 60));
+
+function rad(m, kanal) {
+  const delar = [];
+  // Gäller raden en viss fråga nämner vi den kanalen, inte rummets hetaste: annars citerar
+  // Rösten "stilla i #torget" om en fråga som ställdes i #hjälp.
+  const k = kanal && m.kanaler.find((x) => x.kanal === kanal);
+  if (k) delar.push(`${ord(k.styrka)} i #${k.kanal}`);
+  else if (kanal) delar.push(`tyst i #${kanal}`);
+  else delar.push(m.hetaste ? `${ord(m.styrka)} i #${m.hetaste}` : `det är ${ord(m.styrka)} i rummet`);
+
+  delar.push(`${tal(m.mpm)} inlägg i minuten i rummet`);
+  if (kanal && m.hetaste && m.hetaste !== kanal) delar.push(`mest just nu i #${m.hetaste}`);
+
+  if (m.obesvarade.length) {
+    const min = tillMinuter(m.obesvarade[0].vantat_s);
+    const tid = `${min} minut${min === 1 ? '' : 'er'}`;
+    delar.push(m.obesvarade.length === 1
+      ? `en fråga har väntat ${tid} på svar`
+      : `${m.obesvarade.length} frågor väntar på svar, den äldsta i ${tid}`);
+  }
+  return delar.join(', ') + '.';
 }
 
 // Egen spärr så vi aldrig slår i serverns gräns och aldrig tuggar tomt.
@@ -122,6 +166,7 @@ function tempoPuls(board) {
     styrka: m.styrka,
     nyttolast: {
       ord: ord(m.styrka),
+      rad: rad(m),
       mpm: m.mpm,
       hetaste: m.hetaste,
       kanaler: m.kanaler.slice(0, 3),
@@ -145,7 +190,7 @@ module.exports = {
       for (const m of gamla) {
         if (m.channel === BUSS) continue;
         if (m.ts >= grans) st.msgs.push({ ts: m.ts, channel: m.channel });
-        if (/@kollegan\b/i.test(m.text || '')) st.fragor.set(m.id, { ts: m.ts, channel: m.channel, from: m.from, text: (m.text || '').slice(0, 160), besvarad: false });
+        if (arFraga(m.text)) st.fragor.set(m.id, { ts: m.ts, channel: m.channel, from: m.from, text: (m.text || '').slice(0, 160), besvarad: false });
         if (m.reply_to && st.fragor.has(m.reply_to)) st.fragor.get(m.reply_to).besvarad = true;
       }
       st.msgs.sort((a, b) => a.ts - b.ts);
@@ -174,7 +219,7 @@ module.exports = {
     try {
       if (m.channel === BUSS) return;                  // bussen mäter vi via onEvent, inte som rumstempo
       st.msgs.push({ ts: m.ts, channel: m.channel });
-      if (/@kollegan\b/i.test(m.text || '')) {
+      if (arFraga(m.text)) {
         st.fragor.set(m.id, { ts: m.ts, channel: m.channel, from: m.from, text: (m.text || '').slice(0, 160), besvarad: false });
       }
       if (m.reply_to && st.fragor.has(m.reply_to)) st.fragor.get(m.reply_to).besvarad = true;
@@ -201,14 +246,16 @@ module.exports = {
         if (st.sedda.has(e.id)) return;
         st.sedda.add(e.id);
         const m = mat();
+        const kanal = (e.nyttolast && e.nyttolast.kanal) || null;
         const h = emit(board, 'puls.tryck', {
           styrka: m.styrka,
           orsak: e.id,
           nyttolast: {
             ord: ord(m.styrka),
+            rad: rad(m, kanal),
             mpm: m.mpm,
             hetaste: m.hetaste,
-            kanal: (e.nyttolast && e.nyttolast.kanal) || null,
+            kanal,
             köar: m.obesvarade.length,
             råd: m.styrka >= 55 ? 'kort svar, det är full fart' : 'det finns tid för ett utförligt svar',
           },
@@ -228,6 +275,17 @@ module.exports = {
         return;
       }
 
+      // Ateljén målar kvarterens porträtt. Är det vårt hänger vi upp det i rutan.
+      if (e.typ === 'bild.klar') {
+        const n = e.nyttolast || {};
+        if (n.till === team && typeof n.url === 'string' && n.url.startsWith('/')) {
+          st.portratt = { url: n.url, prompt: String(n.prompt || '').slice(0, 300), av: e.kvarter, ts: e.ts };
+        }
+        st.frammande.push({ ts: e.ts, typ: e.typ, kvarter: e.kvarter, styrka: e.styrka });
+        stadaFonster();
+        return;
+      }
+
       // Stämningen äger tonen. Vi visar den bredvid vår siffra, men räknar inte om den.
       if (e.typ === 'stämning.byte') {
         st.stamning = { ts: e.ts, kvarter: e.kvarter, styrka: e.styrka, nyttolast: e.nyttolast || null };
@@ -241,18 +299,28 @@ module.exports = {
 
   async handle(req, res, { path }) {
     if (req.method !== 'GET') return false;
+
+    // En rad i klartext, för Rösten och för den som bara vill läsa: GET /t/team-martin/rad
+    if (path === '/rad') {
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(rad(mat()) + '\n');
+      return true;
+    }
+
     if (path === '/puls' || path === '/' || path === '') {
       const m = mat();
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify({
         förmåga: 'Pulsen',
+        rad: rad(m),
         nu: { styrka: m.styrka, ord: ord(m.styrka), tempo: m.tempo, tryck: m.tryck, mpm: m.mpm, inlägg: m.inlägg, hetaste: m.hetaste, fönster_min: m.fönster_min },
-        kanaler: m.kanaler,
+        kanaler: m.kanaler.slice(0, 8),
         obesvarade: m.obesvarade,
         historik: st.historik.slice(-90),
         reaktioner: st.reaktioner.slice(-6).reverse(),
         främmande: st.frammande.slice(-6).reverse(),
         stämning: st.stamning,
+        porträtt: st.portratt,
       }));
       return true;
     }

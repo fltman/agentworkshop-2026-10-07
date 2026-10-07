@@ -14,10 +14,19 @@ const ROLES = [
   { name: 'Lotsen', words: ['lots', 'pilot', 'hjalp', 'help'] },
 ];
 
-let state = { version: 1, questions: [], processed: [], errors: [] };
+const emptyState = () => ({ version: 2, questions: [], processed: [], errors: [], turn: 0, served: [] });
+let state = emptyState();
 let file;
 let storageError = null;
 const normalize = text => text.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+const requesterKey = name => name.normalize('NFC').toLowerCase();
+
+function requester(payload, board) {
+  const source = typeof payload.frågare === 'string' ? payload.frågare.trim() : '';
+  if (source && source.length <= 40) return source;
+  const original = board.query({ limit: 500 }).find(message => message.id === payload.inlägg);
+  return original?.from || '(okänd frågare)';
+}
 
 function save() {
   fs.writeFileSync(file + '.tmp', JSON.stringify(state));
@@ -25,10 +34,38 @@ function save() {
 }
 
 function queue(now = Date.now()) {
-  return state.questions.filter(item => item.status === 'väntar').map(item => ({
-    ...item, prioritet: Math.min(99, item.basprioritet + Math.floor(Math.max(0, now - item.ts) / 60000) * 2),
-  })).sort((a, b) => b.prioritet - a.prioritet || a.ts - b.ts || a.id - b.id)
-    .map((item, index) => ({ ...item, köplats: index + 1 }));
+  const served = new Map(state.served.map(item => [item.key, item.turn]));
+  const groups = new Map();
+  for (const item of state.questions.filter(question => question.status === 'väntar')) {
+    const key = requesterKey(item.frågare);
+    if (!groups.has(key)) groups.set(key, { key, questions: [], ts: item.ts, id: item.id });
+    const group = groups.get(key);
+    if (item.ts < group.ts || (item.ts === group.ts && item.id < group.id)) {
+      group.ts = item.ts;
+      group.id = item.id;
+    }
+    group.questions.push({
+      ...item, prioritet: Math.min(99, item.basprioritet + Math.floor(Math.max(0, now - item.ts) / 60000) * 2),
+    });
+  }
+  const ordered = [...groups.values()].sort((a, b) =>
+    (served.get(a.key) || 0) - (served.get(b.key) || 0) || a.ts - b.ts || a.id - b.id);
+  for (const group of ordered) group.questions.sort((a, b) => b.prioritet - a.prioritet || a.ts - b.ts || a.id - b.id);
+  const result = [];
+  for (let round = 0; ordered.some(group => group.questions.length > round); round++) {
+    for (const group of ordered) {
+      if (group.questions[round]) result.push({ ...group.questions[round], köplats: result.length + 1 });
+    }
+  }
+  return result;
+}
+
+function markTurn(item) {
+  state.turn++;
+  const key = requesterKey(item.frågare);
+  const retained = new Set(state.questions.map(question => requesterKey(question.frågare)));
+  state.served = state.served.filter(previous => previous.key !== key && retained.has(previous.key));
+  state.served.push({ key, turn: state.turn });
 }
 
 function capabilities(board) {
@@ -96,6 +133,7 @@ function accept(event, { board, team }) {
     const completed = state.questions.filter(question => question.status === 'besvarad')
       .sort((a, b) => a.besvarad_ts - b.besvarad_ts || a.svarshändelse - b.svarshändelse).slice(-20);
     state.questions = [...state.questions.filter(question => question.status === 'väntar'), ...completed];
+    markTurn(item);
     save();
     return;
   }
@@ -107,7 +145,7 @@ function accept(event, { board, team }) {
   if (queue().length >= 100) throw new Error('Kön är full (100 väntande frågor); frågan kunde inte läggas till.');
   const urgent = /(?:^|[^a-z])(akut|brattom|blockerad|urgent|blocked|stuck)(?:$|[^a-z])/.test(normalize(payload.fråga));
   const item = {
-    id: event.id, ts: event.ts, fråga: payload.fråga.slice(0, 300),
+    id: event.id, ts: event.ts, fråga: payload.fråga.slice(0, 300), frågare: requester(payload, board),
     inlägg: Number.isSafeInteger(payload.inlägg) && payload.inlägg > 0 ? payload.inlägg : null,
     kanal: typeof payload.kanal === 'string' ? payload.kanal.slice(0, 30) : null,
     basprioritet: urgent ? 80 : 50, status: 'väntar',
@@ -117,13 +155,12 @@ function accept(event, { board, team }) {
   state.questions.push(item);
   state.processed = [...state.processed, event.id].slice(-500);
   save();
-  if (event.djup >= 4) throw new Error('Maxdjup 4 nått; Kön får inte förlänga kedjan.');
   const position = queue().find(question => question.id === item.id);
   const result = board.emit('fråga.prioriterad', {
     orsak: event.id,
     styrka: position.prioritet,
     nyttolast: {
-      fråga_id: item.id, fråga: item.fråga, inlägg: item.inlägg, kanal: item.kanal,
+      fråga_id: item.id, fråga: item.fråga, frågare: item.frågare, inlägg: item.inlägg, kanal: item.kanal,
       prioritet: position.prioritet, köplats: position.köplats,
       mottagare: item.mottagare.map(recipient => recipient.team),
       routning: item.mottagare, motivering: item.motivering,
@@ -139,18 +176,32 @@ module.exports = {
   init({ dataDir, board, team }) {
     file = path.join(dataDir, 'queue.json');
     storageError = null;
-    state = { version: 1, questions: [], processed: [], errors: [] };
+    state = emptyState();
     try {
       if (fs.existsSync(file)) {
         const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
-        if (stored.version !== 1 || !Array.isArray(stored.questions) || !Array.isArray(stored.processed) ||
+        if (![1, 2].includes(stored.version) || !Array.isArray(stored.questions) || !Array.isArray(stored.processed) ||
           !Array.isArray(stored.errors) || stored.questions.length > 120 ||
           !stored.questions.every(item => item && Number.isSafeInteger(item.id) && Number.isFinite(item.ts) &&
             typeof item.fråga === 'string' && Number.isFinite(item.basprioritet) &&
             ['väntar', 'besvarad'].includes(item.status) && Array.isArray(item.mottagare))) {
           throw new Error('Ogiltigt format i Köns sparade tillstånd.');
         }
+        if (stored.version === 2 && (!Number.isSafeInteger(stored.turn) || stored.turn < 0 ||
+          !Array.isArray(stored.served) || stored.served.length > 120 ||
+          !stored.served.every(item => typeof item?.key === 'string' && Number.isSafeInteger(item.turn) && item.turn > 0 && item.turn <= stored.turn) ||
+          !stored.questions.every(item => typeof item.frågare === 'string' && item.frågare.length > 0))) {
+          throw new Error('Ogiltig turordning i Köns sparade tillstånd.');
+        }
         state = stored;
+        if (stored.version === 1) {
+          state.version = 2;
+          state.turn = 0;
+          state.served = [];
+          for (const item of state.questions) item.frågare = requester(item, board);
+          for (const item of state.questions.filter(question => question.status === 'besvarad')
+            .sort((a, b) => a.besvarad_ts - b.besvarad_ts || a.svarshändelse - b.svarshändelse)) markTurn(item);
+        }
       }
       for (const event of board.events(500)) {
         if (event.kvarter === team && event.typ === 'fråga.prioriterad') {

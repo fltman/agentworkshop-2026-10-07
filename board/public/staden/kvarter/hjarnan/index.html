@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kollegans nervsystem</title>
+<!-- Ledningens ruta: visar live hur Kollegans förmågor reagerar på varandra via #kollegan-events.
+     Varje händelse med orsak blir en ljuspuls från den som orsakade den till den som reagerade. -->
+<style>
+  :root { --bg:#05070a; --fg:#e6e8eb; --dim:#7d8590; --accent:#ffb454; --line:#1f242c; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow:hidden; }
+  canvas { position:fixed; inset:0; width:100%; height:100%; display:block; }
+  .rubrik { position:fixed; top:14px; left:18px; pointer-events:none; }
+  .rubrik h1 { margin:0; font-size:18px; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); }
+  .rubrik small { color:var(--dim); }
+  .stat { position:fixed; top:14px; right:18px; text-align:right; color:var(--dim); pointer-events:none; font-size:12px; }
+  .stat b { color:var(--fg); font-size:22px; display:block; margin-bottom:4px; font-weight:600; }
+  .tanke { position:fixed; left:18px; bottom:14px; width:min(760px, calc(100vw - 36px)); background:rgba(10,13,18,.82); border:1px solid var(--line); border-radius:10px; padding:10px 14px; font-size:13px; }
+  .tanke h2 { margin:0 0 6px; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); font-weight:500; }
+  .tanke .q { margin-bottom:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tanke .r { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--dim); }
+  .tanke .r b { font-weight:600; }
+  .tom { position:fixed; inset:0; display:grid; place-items:center; color:var(--dim); pointer-events:none; text-align:center; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="rubrik"><h1>Kollegans nervsystem</h1><small>hur förmågorna pratar med varandra · how the capabilities talk to each other</small></div>
+<div class="stat"><span>händelser</span><b id="s-h">0</b><span>kopplingar mellan team</span><b id="s-k">0</b><span>längsta kedja</span><b id="s-l">0</b></div>
+<div class="tanke" id="tanke" hidden><h2>Senaste tankegången · latest train of thought</h2><div class="q" id="t-q"></div><div id="t-r"></div></div>
+<div class="tom" id="tom">Väntar på första händelsen på #kollegan-events …<br>Fråga @kollegan något på Torget.</div>
+<script>
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+let W = 0, H = 0;
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+// Förmågornas namn ur typen. Okända typer får sitt eget prefix som namn: teamen äger sina typer.
+const FORMAGA = [['fråga.ny', 'Örat'], ['fråga.prioriterad', 'Kön'], ['minne', 'Minnet'], ['kunskap', 'Minnet'],
+  ['svar.utkast', 'Rösten'], ['svar.klart', 'Rösten'], ['svar.granskat', 'Granskaren'], ['språk', 'Granskaren'],
+  ['svar.översatt', 'Översättaren'], ['översätt', 'Översättaren'], ['puls', 'Pulsen'], ['stämning', 'Stämningen'],
+  ['lots', 'Lotsen'], ['sammanfattning', 'Mötet'], ['nyfiken', 'Nyfikenheten']];
+function formaga(typ) {
+  for (const [p, n] of FORMAGA) if (typ.startsWith(p)) return n;
+  const p = typ.split('.')[0]; return p.charAt(0).toUpperCase() + p.slice(1);
+}
+function farg(namn, a = 1) {
+  let h = 0; for (const c of namn) h = (h * 31 + c.codePointAt(0)) % 360;
+  return `hsla(${h}, 85%, 62%, ${a})`;
+}
+
+const TORGET = { namn: 'Torget', x: 0, y: 0, tx: 0, ty: 0, glod: 0, antal: 0, typer: new Map(), mitt: true };
+const noder = new Map();           // kvarter -> nod
+const kanter = new Map();          // "a→b" -> {a, b, antal, glod}
+const handelser = new Map();       // id -> {e, rot}
+const pulser = [], ringar = [], ko = [];
+// Ateljéns porträtt: varje förmåga får sin byggnad i noden. Hämtas om var trettionde sekund.
+const portratt = new Map();   // kvarter -> Image
+async function hamtaPortratt() {
+  try {
+    for (const b of await fetch('/t/ateljen/lista').then(r => r.json())) {
+      if (b.typ !== 'portratt' || portratt.has(b.kvarter + b.ts)) continue;
+      const img = new Image(); img.src = b.url + '?v=' + b.ts;
+      img.onload = () => { portratt.set(b.kvarter, img); portratt.set(b.kvarter + b.ts, true); };
+    }
+  } catch (e) {}
+}
+hamtaPortratt(); setInterval(hamtaPortratt, 30000);
+let senasteRot = null, langst = 0;
+
+function nod(namn) {
+  if (!noder.has(namn)) {
+    const n = { namn, x: 0, y: 0, tx: 0, ty: 0, glod: 1, antal: 0, typer: new Map() };
+    noder.set(namn, n); placera(); n.x = n.tx; n.y = n.ty;   // ny nod börjar på sin plats, de andra glider undan
+  }
+  return noder.get(namn);
+}
+function placera() {
+  const cx = W / 2, cy = H * 0.46, R = Math.max(120, Math.min(W, H * 1.15) * 0.34);
+  TORGET.tx = cx; TORGET.ty = cy; if (!TORGET.x) { TORGET.x = cx; TORGET.y = cy; }
+  const lista = [...noder.values()].sort((a, b) => a.namn.localeCompare(b.namn, 'sv'));
+  lista.forEach((n, i) => { const v = -Math.PI / 2 + i * 2 * Math.PI / lista.length; n.tx = cx + R * Math.cos(v); n.ty = cy + R * 0.82 * Math.sin(v); });
+}
+function storlek() { W = innerWidth; H = innerHeight; cv.width = W * DPR; cv.height = H * DPR; g.setTransform(DPR, 0, 0, DPR, 0, 0); placera(); }
+addEventListener('resize', storlek); storlek();
+
+// Kurvan mellan två noder böjs mot mitten, så att kopplingar åt båda hållen syns som två bågar.
+function kontroll(a, b) {
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, dx = b.x - a.x, dy = b.y - a.y;
+  return { x: mx - dy * 0.18 + (TORGET.x - mx) * 0.25, y: my + dx * 0.18 + (TORGET.y - my) * 0.25 };
+}
+function punkt(a, b, t) {
+  const k = kontroll(a, b), u = 1 - t;
+  return { x: u * u * a.x + 2 * u * t * k.x + t * t * b.x, y: u * u * a.y + 2 * u * t * k.y + t * t * b.y };
+}
+
+function ta(e, levande) {
+  if (handelser.has(e.id)) return;
+  const n = nod(e.kvarter);
+  n.antal++; n.typer.set(e.typ, (n.typer.get(e.typ) || 0) + 1);
+  const o = e.orsak ? handelser.get(e.orsak) : null;
+  const rot = o ? o.rot : e.id;
+  handelser.set(e.id, { e, rot });
+  // Panelen följer frågor och reaktioner. En ensam händelse utan orsak tar inte över den.
+  if (o || e.typ.startsWith('fråga')) senasteRot = rot;
+  langst = Math.max(langst, e.djup || 1);
+  let fran = null;
+  if (o && o.e.kvarter !== e.kvarter) {
+    fran = nod(o.e.kvarter);
+    const k = o.e.kvarter + '→' + e.kvarter;
+    if (!kanter.has(k)) kanter.set(k, { a: o.e.kvarter, b: e.kvarter, antal: 0, glod: 0 });
+    const kant = kanter.get(k); kant.antal++; if (levande) kant.glod = 1;
+  } else if (!o && e.typ.startsWith('fråga')) fran = TORGET;
+  if (levande) {
+    if (fran) pulser.push({ a: fran, b: n, t: 0, farg: farg(e.kvarter), text: e.typ });
+    else { n.glod = 1; ringar.push({ n, r: 0, farg: farg(e.kvarter) }); }
+  }
+}
+
+function rita(nu) {
+  g.clearRect(0, 0, W, H);
+  for (const n of [TORGET, ...noder.values()]) { n.x += (n.tx - n.x) * 0.08; n.y += (n.ty - n.y) * 0.08; n.glod *= 0.965; }
+
+  for (const k of kanter.values()) {
+    const a = noder.get(k.a), b = noder.get(k.b); if (!a || !b) continue;
+    const c = kontroll(a, b);
+    g.beginPath(); g.moveTo(a.x, a.y); g.quadraticCurveTo(c.x, c.y, b.x, b.y);
+    g.lineWidth = 1 + Math.log2(k.antal + 1) * 1.6 + k.glod * 3;
+    g.strokeStyle = farg(k.a, 0.16 + k.glod * 0.6); g.stroke();
+    k.glod *= 0.97;
+  }
+  for (const n of noder.values()) {
+    if (!n.antal) continue;
+    g.beginPath(); g.moveTo(TORGET.x, TORGET.y); g.lineTo(n.x, n.y);
+    g.lineWidth = 1; g.strokeStyle = 'rgba(255,255,255,.04)'; g.stroke();
+  }
+
+  for (let i = pulser.length - 1; i >= 0; i--) {
+    const p = pulser[i]; p.t += 0.022;
+    const q = punkt(p.a, p.b, Math.min(p.t, 1));
+    g.save(); g.shadowBlur = 22; g.shadowColor = p.farg; g.fillStyle = p.farg;
+    for (let s = 0; s < 5; s++) { const q2 = punkt(p.a, p.b, Math.max(0, Math.min(p.t, 1) - s * 0.025)); g.globalAlpha = 1 - s * 0.18; g.beginPath(); g.arc(q2.x, q2.y, 5 - s * 0.7, 0, 7); g.fill(); }
+    g.restore();
+    g.globalAlpha = 1; g.fillStyle = p.farg; g.font = '12px ui-monospace, Menlo, monospace'; g.fillText(p.text, q.x + 9, q.y - 9);
+    if (p.t >= 1) { p.b.glod = 1; ringar.push({ n: p.b, r: 0, farg: p.farg }); pulser.splice(i, 1); }
+  }
+  for (let i = ringar.length - 1; i >= 0; i--) {
+    const r = ringar[i]; r.r += 1.6;
+    g.beginPath(); g.arc(r.n.x, r.n.y, 18 + r.r, 0, 7); g.lineWidth = 2;
+    g.strokeStyle = r.farg.replace(/, [\d.]+\)$/, `, ${Math.max(0, 0.7 - r.r / 60)})`); g.stroke();
+    if (r.r > 42) ringar.splice(i, 1);
+  }
+
+  g.save(); g.shadowBlur = 30; g.shadowColor = 'rgba(255,180,84,.6)';
+  g.beginPath(); g.arc(TORGET.x, TORGET.y, 24, 0, 7); g.fillStyle = '#12151a'; g.fill();
+  g.lineWidth = 2; g.strokeStyle = 'rgba(255,180,84,.9)'; g.stroke(); g.restore();
+  g.fillStyle = '#ffb454'; g.font = '600 12px ui-monospace, Menlo, monospace'; g.textAlign = 'center';
+  g.fillText('TORGET', TORGET.x, TORGET.y + 4);
+
+  for (const n of noder.values()) {
+    const bild = portratt.get(n.namn);
+    const r = bild ? Math.min(46, 30 + Math.sqrt(n.antal) * 1.5) : Math.min(34, 13 + Math.sqrt(n.antal) * 2.4);
+    g.save(); g.shadowBlur = 10 + n.glod * 40; g.shadowColor = farg(n.namn);
+    g.beginPath(); g.arc(n.x, n.y, r, 0, 7); g.fillStyle = '#0b0e13'; g.fill(); g.restore();
+    if (bild) { g.save(); g.beginPath(); g.arc(n.x, n.y, r - 1, 0, 7); g.clip(); g.drawImage(bild, n.x - r, n.y - r, r * 2, r * 2); g.restore(); }
+    g.beginPath(); g.arc(n.x, n.y, r, 0, 7);
+    g.lineWidth = 2 + n.glod * 3; g.strokeStyle = farg(n.namn, 0.55 + n.glod * 0.45); g.stroke();
+    const vanligast = [...n.typer.entries()].sort((a, b) => b[1] - a[1])[0];
+    g.textAlign = 'center';
+    g.fillStyle = '#e6e8eb'; g.font = '600 13px ui-monospace, Menlo, monospace'; g.fillText(n.namn, n.x, n.y + r + 16);
+    g.fillStyle = farg(n.namn, 0.9); g.font = '12px ui-monospace, Menlo, monospace';
+    g.fillText(vanligast ? formaga(vanligast[0]) : '', n.x, n.y + r + 31);
+    if (!bild) { g.fillStyle = '#7d8590'; g.font = '11px ui-monospace, Menlo, monospace'; g.fillText(String(n.antal), n.x, n.y + 4); }
+  }
+  g.textAlign = 'left';
+  requestAnimationFrame(rita);
+}
+requestAnimationFrame(rita);
+
+function siffror() {
+  document.getElementById('s-h').textContent = handelser.size;
+  document.getElementById('s-k').textContent = kanter.size;
+  document.getElementById('s-l').textContent = langst;
+  document.getElementById('tom').hidden = handelser.size > 0;
+  if (!senasteRot) return;
+  const kedja = [...handelser.values()].filter(h => h.rot === senasteRot).map(h => h.e).sort((a, b) => a.id - b.id);
+  const forsta = kedja[0], ny = forsta.nyttolast || {};
+  document.getElementById('tanke').hidden = false;
+  document.getElementById('t-q').textContent = (ny.fråga || ny.fraga || forsta.typ) + '';
+  const r = document.getElementById('t-r'); r.textContent = '';
+  for (const e of kedja.slice(-7)) {
+    const d = document.createElement('div'); d.className = 'r';
+    const b = document.createElement('b'); b.style.color = farg(e.kvarter); b.textContent = e.kvarter;
+    d.append('  '.repeat(Math.max(0, (e.djup || 1) - 1)) + (e.djup > 1 ? '↳ ' : '● '), b,
+      ' · ' + formaga(e.typ) + ': ' + e.typ + (e.styrka !== null && e.styrka !== undefined ? ' (' + e.styrka + ')' : ''));
+    r.appendChild(d);
+  }
+}
+
+// Historiken först, utan animation. Sedan bara det nya, med pulser, några i taget så att en
+// skur av händelser inte blir en enda blixt.
+let sista = 0;
+async function hamta(levande) {
+  try {
+    const lista = await fetch('/api/events?since=' + sista + '&limit=' + (levande ? 200 : 500)).then(r => r.json());
+    for (const e of lista) { sista = Math.max(sista, e.id); if (levande) ko.push(e); else ta(e, false); }
+    if (!levande) siffror();
+  } catch (e) {}
+}
+setInterval(() => { const e = ko.shift(); if (e) { ta(e, true); siffror(); } }, 260);
+hamta(false).then(() => setInterval(() => hamta(true), 1500));
+</script>
+</body>
+</html>

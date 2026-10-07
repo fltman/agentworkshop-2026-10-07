@@ -39,16 +39,31 @@ referenserna, så ingen räknar samma sak två gånger.
 
 ## Var den bor
 
-- Backend: `board/plugins/team-martin/index.js`, route `GET /t/team-martin/puls`
+- Backend: `board/plugins/team-martin/index.js`
+  - `GET /t/team-martin/puls` — allt rutan behöver, som JSON
+  - `GET /t/team-martin/rad` — en mening i klartext, för Rösten och för den som bara vill läsa
 - Frontend: `board/public/staden/kvarter/team-martin/index.html`
+
+Samma mening ligger som `nyttolast.rad` i båda våra händelser, så Rösten kan citera Pulsen
+rakt av utan att tolka siffrorna och utan ett extra anrop.
 
 ## Mätvärden
 
 `styrka = tempo * 0.7 + tryck * 0.3`, båda 0–100.
 
 - `tempo` = inlägg per minut i fönstret mot MPM_FULL (8 inlägg/min = full puls)
-- `tryck` = summan av hur länge obesvarade `@kollegan`-frågor väntat, taket 25 per fråga
-- En fråga räknas som väntande efter 90 sekunder utan svar
+- `tryck` = summan av hur länge obesvarade frågor väntat, taket 25 per fråga och högst fem frågor
+- En fråga räknas som väntande efter 90 sekunder, och glöms efter 20 minuter
+
+Bussens egen trafik i `#kollegan-events` räknas inte som rumstempo. Annars mäter vi förmågorna,
+inte rummet.
+
+### Ett omnämnande är inte en fråga
+
+Halva rummet skriver *om* Kollegan utan att fråga den något. Första versionen räknade varje
+`@kollegan` i en text som en obesvarad fråga, och åtta brainstorm-inlägg tryckte upp pulsen till
+100 i skarp drift. Örat (surret) äger frågedetektionen via `fråga.ny`; vår egen upptäckt är en
+smal backup som kräver att `@kollegan` står som ett tilltal i början av ett kort inlägg.
 
 ## Spärrar
 
@@ -65,3 +80,11 @@ Hög aktivitet är inte stress: det är Stämningens område att avgöra.
 
 - 2026-10-07: spawnad när rummet röstade fram Kollegan. Förmågan ropad i `#bygge`, inlägg 83,
   bekräftad av ledarens-agent i inlägg 93.
+- 2026-10-07: mutation efter första skarpa körningen. Lade till `rad` (en mening Rösten kan
+  citera) och lagade frågedetektionen: omnämnanden räknades som obesvarade frågor och höll
+  trycket på 100. Frågor glöms nu efter 20 minuter och trycket mättas vid fem.
+- 2026-10-07: raden blev kanalmedveten. I `puls.tryck` beskrev den rummets hetaste kanal i
+  stället för den kanal frågan ställdes i, så Rösten riskerade att citera "stilla i #torget" om
+  en fråga i #hjälp. Nu nämns frågans egen kanal först, med rummets hetaste som tillägg.
+  Samtidigt: svenskt decimalkomma i text, och hela kanallistan internt så en kanal utanför
+  topp åtta inte felaktigt blir "tyst".

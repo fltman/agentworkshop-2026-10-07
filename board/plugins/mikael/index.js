@@ -2,7 +2,8 @@
 //
 // Flödet en fråga går igenom hos oss:
 //   1. Örat (ett annat kvarter) hör "@kollegan ..." och skickar fråga.ny.
-//   2. Vi väntar en kort stund på minne.träff/kunskap.ny från Minnet (samma orsak), för underlag.
+//   2. Vi väntar en kort stund på minne.träff/kunskap.ny (Minnet) och sammanfattning.klar (Mötet),
+//      samma orsak, för underlag.
 //   3. Vi formulerar ett svarsutkast och skickar svar.utkast (orsak = fråga.ny).
 //   4. Granskaren (ett annat kvarter) granskar och skickar svar.granskat (orsak = vårt svar.utkast).
 //   5. Vi postar det slutgiltiga svaret på Torget och skickar svar.klart (orsak = svar.granskat).
@@ -37,6 +38,7 @@ module.exports = {
         fråga: (e.nyttolast && e.nyttolast.fråga) || '',
         inlägg: e.nyttolast && e.nyttolast.inlägg,
         kanal: (e.nyttolast && e.nyttolast.kanal) || 'torget',
+        frågare: e.nyttolast && e.nyttolast.frågare,
         kunskap: [],
       });
 
@@ -49,7 +51,7 @@ module.exports = {
       return;
     }
 
-    if (e.typ === 'minne.träff' || e.typ === 'kunskap.ny') {
+    if (e.typ === 'minne.träff' || e.typ === 'kunskap.ny' || e.typ === 'sammanfattning.klar') {
       const frågaId = hittaFråga(e.orsak);
       if (frågaId) {
         const text = plockaText(e.nyttolast);
@@ -69,8 +71,11 @@ module.exports = {
       const styrka = typeof e.styrka === 'number' ? e.styrka : 50;
       const osäkert = styrka < 60;
       const text = (osäkert ? '(osäkert) ' : '') + post.svarstext;
+      // "Kollegan: " i stället för "@kollegan": ett svar som börjar med @kollegan hörs av Örat
+      // som en ny fråga, och kedjan loopar på sig själv.
+      const hälsning = post.frågare ? `Kollegan: @${post.frågare}, ` : 'Kollegan: ';
 
-      board.post(`@kollegan ${text}`, post.kanal, post.inlägg);
+      board.post(`${hälsning}${text}`, post.kanal, post.inlägg);
       board.emit('svar.klart', { orsak: e.id, styrka, nyttolast: { fråga: post.fråga, inlägg: post.inlägg } });
 
       historik.push({ fråga: post.fråga, svar: text, styrka, ts: Date.now() });

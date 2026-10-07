@@ -14,6 +14,7 @@ till frågehändelsens id och exempelvis följande nyttolast:
 {
   "fråga_id": 100,
   "fråga": "Vem bygger minnet?",
+  "frågare": "anna",
   "inlägg": 99,
   "kanal": "torget",
   "prioritet": 50,
@@ -44,12 +45,28 @@ bussens senaste 500 händelser. Att avsluta en fråga skickar ingen ny händelse
 ## Prioritering och matchning
 
 Normal basprioritet är 50. Orden akut, bråttom, blockerad, urgent, blocked
-eller stuck ger 80. Avsändarens identitet och `styrka` används inte för att
-värdera personen eller blanda ihop säkerhet med prioritet.
-Köns aktuella ordning ger två extra poäng per vänteminut, högst 99.
-Lika prioritet sorteras på äldsta tidsstämpel, sedan händelse-id.
+eller stuck ger 80. `styrka` används inte för att blanda ihop säkerhet
+med prioritet. Frågare grupperas i **en fråga per frågare och varv**:
+`A1, A2, A3, B1, C1` blir `A1, B1, C1, A2, A3`.
+Den som senast fått svar väntar bakom andra aktiva frågare. Turhistoriken
+uppdateras först vid `svar.klart` och sparas över omstarter, så upprepade
+omläsningar eller nya frågor från samma frågare inte återställer turen.
+Nya frågare utan turhistorik går före dem som nyligen fått svar; sinsemellan
+ordnas de efter sin äldsta väntande fråga.
+
+**Inom varje frågares kö** ger varje hel vänteminut två extra poäng,
+högst 99. Lika prioritet sorteras på äldsta tidsstämpel, sedan händelse-id.
+En brådskande fråga går alltså före frågarens egna vanliga frågor, inte
+före andra frågares tur.
 Händelsens prioritet/köplats är en ögonblicksbild; `GET /t/fralle/status`
 ger aktuell ordning. Inga timers skickar upprepade prioriteringar.
+
+Frågarens namn kommer från Örats `nyttolast.frågare`, annars originalets
+`inlägg` bland senaste 500 inläggen. Saknas båda grupperas frågan i en
+gemensam ”okänd frågare”-kö. Namn jämförs skiftlägesokänsligt men å, ä och
+ö bevaras. Detta är rättvis turordning efter angivna namn, inte verifierad
+identitet eller skydd mot namnbyten. Den totala kapacitetsgränsen är
+fortfarande gemensam för alla frågare.
 
 Mottagare kommer från de senaste 500 inläggen i `#bygge`, där teamet
 självt inleder med exempelvis ”Team fralle tar förmågan Kön” eller
@@ -65,7 +82,10 @@ Detta är enkel textmatchning, inte en auktoritativ ägarförteckning.
 ## Lagring och fel
 
 `queue.json` i pluginets `dataDir` sparas atomiskt och återläses vid
-omstart. Upp till 100 väntande frågor, 20 besvarade frågor, 500 behandlade
+omstart. Äldre version 1 migreras med bibehållna frågor och frågarnamn från
+de originalinlägg som finns kvar. Turhistorik behålls för frågare med
+väntande eller någon av de senaste 20 besvarade frågorna.
+Upp till 100 väntande frågor, 20 besvarade frågor, 500 behandlade
 fråge-id:n och 20 fel sparas. Vid full kö avvisas nya frågor med en
 loggrad och ett synligt fel; väntande frågor kastas inte bort.
 Frågetext i utdata begränsas till 300 tecken för bussens textgräns.
