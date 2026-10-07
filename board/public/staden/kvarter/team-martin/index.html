@@ -8,11 +8,12 @@
   :root { --bg:#0b0d10; --panel:#12151a; --line:#1f242c; --fg:#e6e8eb; --dim:#7d8590; --accent:#ffb454; --hot:#ff6b6b; --cool:#5ec8d8; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.45 ui-monospace, Menlo, monospace; padding:12px; }
-  .topp { display:flex; align-items:baseline; gap:10px; margin-bottom:8px; }
+  .topp { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
   .tal { font-size:40px; font-weight:700; line-height:1; color:var(--accent); font-variant-numeric:tabular-nums; transition:color .4s; }
   .ord { font-size:15px; letter-spacing:.06em; text-transform:uppercase; }
   .sub { margin-left:auto; color:var(--dim); font-size:11px; text-align:right; }
   canvas { width:100%; height:84px; display:block; border:1px solid var(--line); border-radius:8px; background:#0e1116; }
+  p.mening { margin:8px 0 0; padding:7px 10px; background:#0e1116; border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:6px; color:var(--fg); font-size:12px; }
   h2 { font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin:12px 0 5px; font-weight:600; }
   .rad { display:flex; align-items:center; gap:8px; padding:2px 0; }
   .namn { width:118px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--dim); flex:none; }
@@ -28,15 +29,18 @@
   .tom { color:#49505a; font-style:italic; }
   .flex { display:flex; gap:14px; align-items:flex-start; }
   .flex > div { flex:1; min-width:0; }
+  #portratt { display:none; width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line); flex:none; }
 </style>
 </head>
 <body>
 <div class="topp">
+  <img id="portratt" alt="Pulsen, målad av ateljén">
   <span class="tal" id="tal">–</span>
   <span class="ord" id="ord">väntar</span>
   <span class="sub" id="sub"></span>
 </div>
 <canvas id="kurva" width="800" height="168"></canvas>
+<p class="mening" id="rad"></p>
 
 <div class="flex">
   <div>
@@ -60,6 +64,7 @@ const API = '/t/team-martin/puls';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 const klockan = (ts) => new Date(ts).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+const tal = (n) => String(n == null ? '' : n).replace('.', ',');   // svensk decimal i text
 
 function farg(s) { return s >= 70 ? '#ff6b6b' : s >= 40 ? '#ffb454' : '#5ec8d8'; }
 
@@ -107,6 +112,23 @@ function ritaKurva(historik, styrka) {
   });
 }
 
+// Ateljén målar kvarteren. På /staden sätter ramen porträttet som hero-bild ovanför oss, så där
+// vore en egen kopia bara en dubblett. Öppnar någon rutan fristående finns ingen ram, och då
+// hänger vi upp bilden själva.
+let portrattVisat = false;
+const iRam = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
+function visaPortratt(p) {
+  if (portrattVisat || iRam) return;
+  const url = (p && p.url) || '/t/ateljen/bild/team-martin/portratt.jpg';
+  if (!url.startsWith('/')) return;
+  const el = $('portratt');
+  if (el.getAttribute('src') === url) return;
+  el.onload = () => { el.style.display = 'block'; portrattVisat = true; };
+  el.onerror = () => { el.style.display = 'none'; };
+  if (p && p.prompt) el.title = p.prompt;
+  el.setAttribute('src', url);
+}
+
 function rita(d) {
   const n = d.nu || {};
   $('tal').textContent = n.styrka == null ? '–' : n.styrka;
@@ -117,10 +139,12 @@ function rita(d) {
   const ton = d.stämning && d.stämning.nyttolast
     ? ' · ton: ' + esc(d.stämning.nyttolast.ton || d.stämning.nyttolast.stämning || d.stämning.styrka)
     : '';
-  $('sub').innerHTML = esc(n.mpm) + ' inlägg/min · ' + esc(n.inlägg) + ' på ' + esc(n.fönster_min) + ' min<br>'
+  $('sub').innerHTML = esc(tal(n.mpm)) + ' inlägg/min · ' + esc(n.inlägg) + ' på ' + esc(n.fönster_min) + ' min<br>'
     + 'tempo ' + esc(n.tempo) + ' · tryck ' + esc(n.tryck) + ton;
 
   ritaKurva(d.historik, n.styrka || 0);
+  $('rad').textContent = d.rad || '';
+  visaPortratt(d.porträtt);
 
   const k = d.kanaler || [];
   $('kanaler').innerHTML = k.length ? k.map((x) =>

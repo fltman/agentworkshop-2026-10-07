@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>Granskaren</title>
+<style>
+  /* min-height, inte height:100% med overflow:hidden: /staden mäter scrollHeight för att låta rutan
+     växa med innehållet, och en låst body rapporterar bara rutans egen höjd. */
+  html,body{margin:0;min-height:340px;background:#0b0d10;color:#e6e8eb;font:13px/1.45 ui-monospace,Menlo,monospace}
+  header{padding:12px 14px;border-bottom:1px solid #1c2127;display:flex;justify-content:space-between;align-items:center}
+  h1{color:#ffb454;font-size:16px;margin:0;letter-spacing:.08em;font-weight:700}
+  .badge{background:#1c2127;color:#8b949e;padding:2px 6px;border-radius:4px;font-size:11px}
+  .metrics-grid{display:grid;grid-template-columns:repeat(4, 1fr);gap:8px;padding:12px 14px;border-bottom:1px solid #1c2127;background:#0f1216}
+  .card{background:#161b22;padding:8px 10px;border-radius:6px;border:1px solid #21262d}
+  .card-label{color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  .card-val{font-size:18px;font-weight:bold;margin-top:2px;color:#f0f6fc}
+  .card-sub{font-size:10px;color:#8b949e;margin-top:2px}
+  .f-btn{background:#161b22;border:1px solid #30363d;color:#8b949e;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;font-family:inherit}
+  .f-btn.aktiv{background:#238636;color:#fff;border-color:#2ea043}
+  .bar{flex:1;background:#30363d;border-radius:2px 2px 0 0;min-height:3px;transition:height .3s}
+  .källor-rad{padding:8px 14px;border-bottom:1px solid #1c2127;font-size:11px;color:#8b949e;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .tag{background:#1f2937;color:#5fd7a7;padding:1px 6px;border-radius:10px;font-size:11px}
+  .sektion-titel{padding:10px 14px 4px;font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.05em}
+  .rad{padding:10px 14px;border-bottom:1px solid #161b22;transition:background .15s}
+  .rad:hover{background:#12161c}
+  .topp{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+  .från{color:#8b949e}
+  .styrka{font-weight:bold}
+  .godkänt .styrka{color:#5fd7a7}
+  .sänkt .styrka{color:#ff6b6b}
+  .skäl{color:#8b949e;margin-top:4px;font-size:12px}
+  .svar{margin-top:4px;color:#e6e8eb;font-size:13px;background:#161b22;padding:6px 8px;border-radius:4px;border-left:3px solid #30363d}
+  .godkänt .svar{border-left-color:#5fd7a7}
+  .sänkt .svar{border-left-color:#ff6b6b}
+  .tom{padding:28px 14px;color:#8b949e;text-align:center}
+  .stapel{height:4px;background:#21262d;border-radius:2px;overflow:hidden;margin-top:8px}
+  .stapel>div{height:100%;transition:width .3s}
+</style></head>
+<body>
+<header>
+  <h1>GRANSKAREN · heimlen</h1>
+  <span class="badge" id="live-status">Laddar…</span>
+</header>
+
+<div class="metrics-grid">
+  <div class="card">
+    <div class="card-label">Granskade</div>
+    <div class="card-val" id="m-total">0</div>
+    <div class="card-sub" id="m-delning">0 godk / 0 sänkta</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Godkända</div>
+    <div class="card-val" id="m-andel">0%</div>
+    <div class="card-sub">tröskel ≥ 50</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Snittstyrka</div>
+    <div class="card-val" id="m-snitt">0</div>
+    <div class="card-sub">justerad säkerhet</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Kedjelatens</div>
+    <div class="card-val" id="m-latens">--</div>
+    <div class="card-sub">fråga → svar.klart</div>
+  </div>
+</div>
+
+<div class="latens-sektion" id="latens-box" style="padding:8px 14px;border-bottom:1px solid #1c2127;display:flex;align-items:center;gap:12px">
+  <span style="font-size:11px;color:#8b949e">Svarstidsgraf:</span>
+  <div id="latens-bars" style="display:flex;align-items:flex-end;gap:3px;height:24px;flex:1"></div>
+</div>
+
+<div class="källor-rad" id="källor-container">
+  <span>Betrodda källor:</span>
+  <span id="källor-lista" style="display:flex;gap:4px;flex-wrap:wrap">väntar på data…</span>
+</div>
+
+<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px 4px">
+  <div class="sektion-titel" style="padding:0">Senaste granskningarna</div>
+  <div style="display:flex;gap:4px" id="filter-knappar">
+    <button class="f-btn aktiv" data-filter="alla">Alla</button>
+    <button class="f-btn" data-filter="godk">Godkända</button>
+    <button class="f-btn" data-filter="sänkt">Sänkta</button>
+  </div>
+</div>
+<div id="lista"><div class="tom">väntar på svar.utkast att granska…</div></div>
+
+<script>
+const lista = document.getElementById('lista');
+const statusBadge = document.getElementById('live-status');
+const latensBars = document.getElementById('latens-bars');
+let valdFilter = 'alla';
+let aktuellData = [];
+
+document.getElementById('filter-knappar').addEventListener('click', e => {
+  if (e.target.tagName !== 'BUTTON') return;
+  document.querySelectorAll('.f-btn').forEach(b => b.classList.remove('aktiv'));
+  e.target.classList.add('aktiv');
+  valdFilter = e.target.dataset.filter;
+  renderaLista();
+});
+
+function rad(g) {
+  const cls = g.godkänt ? 'godkänt' : 'sänkt';
+  const färg = g.godkänt ? '#5fd7a7' : '#ff6b6b';
+  const när = new Date(g.ts).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const källTags = (g.källor && g.källor.length)
+    ? g.källor.map(k => `<span class="tag">${k}</span>`).join(' ')
+    : '<span style="color:#8b949e">inga</span>';
+
+  return `<div class="rad ${cls}">
+    <div class="topp">
+      <span class="från">#${g.handelse} från @${g.från} · ${när}</span>
+      <span class="styrka">${g.styrka}</span>
+    </div>
+    ${g.svar ? `<div class="svar">${g.svar.replace(/</g,'&lt;')}</div>` : ''}
+    <div class="skäl">${g.godkänt ? '✓ Godkänt' : '✗ Underkänt'} — ${g.skäl} (källor: ${källTags})</div>
+    <div class="stapel"><div style="width:${g.styrka}%;background:${färg}"></div></div>
+  </div>`;
+}
+
+function renderaLista() {
+  let filtrerad = aktuellData;
+  if (valdFilter === 'godk') filtrerad = aktuellData.filter(x => x.godkänt);
+  if (valdFilter === 'sänkt') filtrerad = aktuellData.filter(x => !x.godkänt);
+
+  if (!filtrerad.length) {
+    lista.innerHTML = '<div class="tom">inga granskningar matchar filtret</div>';
+    return;
+  }
+  lista.innerHTML = filtrerad.slice(0, 15).map(rad).join('');
+}
+
+function uppdateraMetrics(m) {
+  if (!m) return;
+  document.getElementById('m-total').textContent = m.total;
+  document.getElementById('m-delning').textContent = `${m.godkända} godk / ${m.underkända} sänkta`;
+  document.getElementById('m-andel').textContent = `${m.godkändAndel}%`;
+  document.getElementById('m-snitt').textContent = m.snittStyrka;
+  document.getElementById('m-latens').textContent = m.snittLatensMs ? `${(m.snittLatensMs / 1000).toFixed(1)}s` : '--';
+
+  const källLista = document.getElementById('källor-lista');
+  const frek = m.källorFrekvens || {};
+  const entries = Object.entries(frek);
+  if (entries.length) {
+    källLista.innerHTML = entries.map(([k, cnt]) => `<span class="tag">${k} (${cnt})</span>`).join(' ');
+  } else {
+    källLista.textContent = 'inga källor än';
+  }
+
+  // Rita latensbars
+  const lats = m.latensHistorik || [];
+  if (lats.length) {
+    const max = Math.max(...lats, 2000);
+    latensBars.innerHTML = lats.map(ms => {
+      const h = Math.max(10, Math.round((ms / max) * 100));
+      const col = ms > 5000 ? '#ff6b6b' : (ms > 2500 ? '#ffb454' : '#5fd7a7');
+      return `<div class="bar" style="height:${h}%;background:${col}" title="${(ms/1000).toFixed(1)}s"></div>`;
+    }).join('');
+  } else {
+    latensBars.innerHTML = '<span style="font-size:10px;color:#8b949e">mäts automatiskt vid svar.klart…</span>';
+  }
+}
+
+function visa() {
+  fetch('/t/heimlen/metrics').then(r => r.json()).then(d => {
+    statusBadge.textContent = 'Aktiv';
+    statusBadge.style.color = '#5fd7a7';
+    uppdateraMetrics(d.metrics);
+    aktuellData = d.granskningar || [];
+    renderaLista();
+  }).catch(() => {
+    statusBadge.textContent = 'Väntar…';
+    statusBadge.style.color = '#8b949e';
+  });
+}
+
+visa();
+setInterval(visa, 5000);
+</script>
+</body></html>

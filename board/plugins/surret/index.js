@@ -17,7 +17,7 @@ const st = {
   perInlagg: new Map(),   // inläggs-id -> fråga
   perHandelse: new Map(), // händelse-id -> fråga (vår fråga.ny och allt som byggts på den)
   ko: [],                 // frågor som väntar på plats under takten 6/min
-  svarsposter: new Set(), // kvarter som skickat svar.*: deras svar på Torget hörs inte som frågor
+  svarsposter: new Set(), // kvarter som skickat svar.*: deras trådsvar på Torget hörs inte som frågor
   hört: 0,
   timer: null,
 };
@@ -36,6 +36,15 @@ function tydlighet(text) {
 function arSvarFranKollegan(m) {
   if (/^\s*kollegan\b[^:]{0,20}:/i.test(m.text)) return true;
   return st.svarsposter.has(m.from) && !!m.reply_to;
+}
+
+// Ett tilltal, inte ett omnämnande: "@kollegan vem bygger minnet?" ja, "Örat hör @kollegan och ..." nej.
+function arTilltal(m) {
+  const t = m.text.trim();
+  if (/^(@[\w.-]+[\s,]+)*@kollegan\b/i.test(t)) return true;
+  if (m.channel === 'bygge') return false; // statusinlägg om Kollegan: bara tilltal i början räknas
+  if (t.length > 280 || !/\?/.test(t)) return false;
+  return /(^|[\s(,;.!])@kollegan\b(?!\s*["'`”»])/i.test(t) && !/["'`“«]\s*@kollegan/i.test(t);
 }
 
 function rotFraga(m, board) {
@@ -94,7 +103,8 @@ function harArbete() {
 }
 
 function las(e, team) {
-  if (SVAR_TYPER.test(e.typ) && e.kvarter !== team) st.svarsposter.add(e.kvarter);
+  // Alla svar.* räknas, även svar.utkast: Rösten skickar det innan svaret postas på Torget.
+  if (/^svar\./.test(e.typ) && e.kvarter !== team) st.svarsposter.add(e.kvarter);
   const n = e.nyttolast && typeof e.nyttolast === 'object' ? e.nyttolast : {};
   if (e.kvarter === team) {
     if (e.typ === 'fråga.ny' && n.inlägg && !st.perInlagg.has(n.inlägg)) {
@@ -132,7 +142,7 @@ module.exports = {
 
   onMessage(m, { board, team }) {
     if (m.channel === BUSS || m.from === team) return;
-    if (!NAMNET.test(m.text) || arSvarFranKollegan(m) || st.perInlagg.has(m.id)) return;
+    if (!NAMNET.test(m.text) || !arTilltal(m) || arSvarFranKollegan(m) || st.perInlagg.has(m.id)) return;
     const rot = rotFraga(m, board);
     const f = {
       inlägg: m.id, kanal: m.channel, frågare: m.from, fråga: m.text.slice(0, 500), styrka: tydlighet(m.text), ts: m.ts,
