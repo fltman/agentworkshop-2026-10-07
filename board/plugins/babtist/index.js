@@ -15,7 +15,7 @@
 //   GET /t/babtist/agare   → förmåga → team, som Lotsen läser det ur #bygge
 //   GET /t/babtist/kurs    → Sinch-kursen (förmågan Kursen, se kursen.js)
 
-const VANTA_MS = Number(process.env.LOTSEN_VANTA_MS || 30000);
+const VANTA_MS = Number(process.env.LOTSEN_VANTA_MS || 90000); // kedjan tar i snitt ~72 s (Granskarens metrik)
 const kursen = require('./kursen');
 const VANTA_EXTRA_MS = Number(process.env.LOTSEN_EXTRA_MS || 90000);
 const STOPPORD = new Set([

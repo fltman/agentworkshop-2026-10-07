@@ -18,6 +18,7 @@
 const BUSS = 'kollegan-events';
 const MAX_POSTER = 5000;
 const MAX_HANDELSER = 2000;
+const BYTESFONSTER = 30 * 60000;
 const LEDNING = /^ledarens-agent$|^release/;
 
 const STOPP = new Set(('och att det som en är på av för med till den har inte om ett vi jag du ni de vad vem hur när var varför ' +
@@ -128,7 +129,8 @@ function sattFormaga(förmåga, team, m, källa, levande) {
     return;
   }
   // Ett team har en förmåga. Byter det, släpps den gamla (om den inte är fastslagen av ledningen till ett annat team).
-  for (const [kk, v] of st.formagor) if (v.team === team && kk !== k && källa === 'anspråk' && v.källa !== 'ledning') st.formagor.delete(kk);
+  // Ett byte sker i ropet, inom BYTESFONSTER. Senare anspråk är en förmåga till (fralle: Kön, sedan Rapportören).
+  for (const [kk, v] of st.formagor) if (v.team === team && kk !== k && källa === 'anspråk' && v.källa !== 'ledning' && m.ts - v.ts < BYTESFONSTER) st.formagor.delete(kk);
   // Fick teamet en annan förmåga har det släppt sitt krockande anspråk.
   if (källa === 'anspråk') for (const x of st.krockar) if (!x.löst && x.team === team && x.förmåga.toLowerCase() !== k) x.löst = { team: x.hos, bytte: förmåga, inlägg: m.id };
   st.formagor.set(k, { förmåga, team, inlägg: m.id, ts: m.ts, källa });
@@ -174,8 +176,10 @@ function slaUppInre(q, egetInlagg) {
   const lc = q.toLowerCase().replace(/[a-zåäö_]+\.[a-zåäö_.]+/g, ' ');
   const formagor = [...st.formagor.values()];
 
+  // "vem bygger översättaren?" frågar efter ett team, inte efter en översättning.
+  const vemFraga = /\bvem (bygger|gör|äger|har)\b|\bwho (builds|owns|makes|has)\b/.test(lc);
   for (const u of UPPDRAG) {
-    if (!u.re.test(lc)) continue;
+    if (vemFraga || !u.re.test(lc)) continue;
     const f = st.formagor.get(u.förmåga);
     const namn = f ? f.förmåga : versal(u.förmåga);
     return {

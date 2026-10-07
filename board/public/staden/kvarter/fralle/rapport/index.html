@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fralle · Rapportören</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">FRALLE / KOLLEGAN</p>
+      <h1>Rapportören</h1>
+      <p>Gemensamma observationer, källtäckning och uttryckligen uppmätt nytta.</p>
+      <a href="/staden/kvarter/fralle/">← Tillbaka till Kön</a>
+    </header>
+    <div class="toolbar">
+      <label for="period">Tidsperiod</label>
+      <select id="period">
+        <option value="15">Senaste 15 minuterna</option>
+        <option value="60" selected>Senaste timmen</option>
+        <option value="1440">Senaste dygnet</option>
+      </select>
+      <span>Uppdateras 30 sekunder efter varje hämtning.</span>
+    </div>
+    <p id="connection" role="status" aria-live="polite">Hämtar rapport…</p>
+    <div id="report"></div>
+    <p class="note">Inga frågetexter eller personnamn visas. Observationerna är inte garanterade totalsiffror för workshopen.</p>
+  </main>
+</body>
+</html>

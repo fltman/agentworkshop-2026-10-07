@@ -18,6 +18,8 @@
 //
 //   GET  /t/farzad/state  → vad Kollegan undrar nu, historik, när nästa fråga får komma, sagan
 //   POST /t/farzad/vack   → en människa väcker nyfikenheten (kortare spärr)
+//   POST /t/farzad/paus   → pausar frågorna, sagan och uppropet (under demon)
+//   POST /t/farzad/fortsatt → slår på dem igen
 
 const fs = require('fs');
 const path = require('path');
@@ -75,6 +77,7 @@ const st = {
   pingNr: 0,
   senastePing: 0,
   topplista: {},                         // kvarter → {svar, bästaMs, senast, status}
+  paus: false,                           // under demon: inga frågor, ingen ny saga, inget nytt upprop
   timer: null,
   fil: null,
 };
@@ -139,6 +142,7 @@ function spara() {
       senasteFraga: st.senasteFraga, historik: st.historik.slice(-50),
       saga: st.saga, sagor: st.sagor.slice(-20), sagaNr: st.sagaNr, senasteSaga: st.senasteSaga, senasteBild: st.senasteBild,
       ping: st.ping, upprop: st.upprop.slice(-10), pingNr: st.pingNr, senastePing: st.senastePing, topplista: st.topplista,
+      paus: st.paus,
     }));
   } catch (err) { console.error('[farzad] spara:', err.message); }
 }
@@ -271,6 +275,7 @@ function basta(nu) {
 
 function fraga(board, { knapp = false } = {}) {
   const nu = Date.now();
+  if (st.paus) return { error: 'nyfikenheten är pausad under demon' };
   if (nu - st.senasteFraga < (knapp ? KNAPP_SPARR_MS : SPARR_MS)) return { error: 'nyfikenheten vilar en stund till' };
   if (!knapp && nu - st.senasteAndras < TYST_MS) return { error: 'någon annan har frågat nyligen' };
   const e = basta(nu);
@@ -316,14 +321,15 @@ module.exports = {
       st.pingNr = d.pingNr || 0;
       st.senastePing = d.senastePing || 0;
       st.topplista = d.topplista && typeof d.topplista === 'object' ? d.topplista : {};
+      st.paus = !!d.paus;
     } catch {}
     // Timern väcker bara kandidater som redan kommit från andra kvarter, när tystnaden räckt länge nog,
     // och börjar en saga bara om staden rört sig sedan förra.
     st.timer = setInterval(() => {
       try { fraga(board); } catch (err) { console.error('[farzad]', err && err.message); }
-      try { const nu = Date.now(); avslutaSaga(board, team, nu); startaSaga(board, team, nu); }
+      try { const nu = Date.now(); avslutaSaga(board, team, nu); if (!st.paus) startaSaga(board, team, nu); }
       catch (err) { console.error('[farzad] saga:', err && err.message); }
-      try { const nu = Date.now(); avslutaPing(nu); startaPing(board, nu); }
+      try { const nu = Date.now(); avslutaPing(nu); if (!st.paus) startaPing(board, nu); }
       catch (err) { console.error('[farzad] ping:', err && err.message); }
     }, 30 * 1000);
     if (st.timer.unref) st.timer.unref();
@@ -404,7 +410,14 @@ module.exports = {
           kvarter: [...new Set([...st.settKvarter, ...Object.keys(st.topplista)])].filter(k => k !== 'farzad'),
           nästa: st.ping ? null : st.senastePing + PING_MS,
         },
+        paus: st.paus,
       });
+      return true;
+    }
+    if (req.method === 'POST' && (p === '/paus' || p === '/fortsatt')) {
+      st.paus = p === '/paus';
+      spara();
+      json(res, 200, { ok: true, paus: st.paus });
       return true;
     }
     if (req.method === 'POST' && p === '/vack') {

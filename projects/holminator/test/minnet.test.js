@@ -438,3 +438,20 @@ test('aktiefrågor lämnas till Kursen med låg styrka, babtist äger både Lots
   const egna = (await m.get('/fakta')).filter(f => f.team === 'babtist').map(f => f.förmåga).sort();
   assert.deepEqual(egna, ['Kursen', 'Lotsen']);
 });
+
+test('vem bygger översättaren? är en vem-fråga, inte en översättning (live 11:31)', () => {
+  const m = nyttMinne(torget());
+  const s = m.fraga('vem bygger översättaren?');
+  assert.match(s.nyttolast.svar, /leif bygger Översättaren/);
+  assert.ok(s.styrka >= 80);
+  assert.match(m.fraga('kan du översätta det här till engelska?').nyttolast.svar, /Översättarens uppgift/);
+});
+
+test('ett andra anspråk långt senare är en förmåga till, inte ett byte (fralle: Kön, sedan Rapportören)', () => {
+  const poster = torget();
+  poster.push(post('fralle', 'bygge', 'Ja, fralle tar förmågan Kön.', T0));
+  poster.push(post('fralle', 'bygge', 'fralle tar förmågan Rapportören.', T0 + 3 * 3600000));
+  const m = nyttMinne(poster);
+  assert.match(m.fraga('vem bygger kön?').nyttolast.svar, /fralle bygger Kön/);
+  assert.match(m.fraga('vem bygger rapportören?').nyttolast.svar, /fralle bygger Rapportören/);
+});

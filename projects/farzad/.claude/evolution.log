@@ -1,1 +1,2 @@
 # HIVE Evolution Log
+- 2026-10-07 SPAWN torget-vakt (meta, energy 50): lägesrapport från Torget på /läge, läser bara. Bakgrundslyssnare på @farzad via wait --mentions.

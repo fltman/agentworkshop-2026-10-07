@@ -239,16 +239,42 @@ module.exports = {
     const rotFråga = förfäderTillE.find((h) => h.typ === 'fråga.ny') || (e.nyttolast && e.nyttolast.fråga_id ? index.get(e.nyttolast.fråga_id) : null);
     const fragaId = rotFråga ? rotFråga.id : ((e.nyttolast && e.nyttolast.fråga_id) || e.orsak || null);
     const fragaTs = rotFråga && rotFråga.ts ? rotFråga.ts : null;
+    const frågetext = rotFråga && rotFråga.nyttolast ? (rotFråga.nyttolast.fråga || rotFråga.nyttolast.text || '') : '';
+
+    const ärAnteckning = /\b(anteckna|notera|kom ihåg)\b/i.test(frågetext);
+    const ärSammanfattning = /\bsammanfatta\b/i.test(frågetext);
 
     const grundStyrka = e.styrka ?? 50;
     let styrka;
     let skäl;
-    if (källor.length === 0) {
+
+    if (ärAnteckning) {
+      if (källor.includes('marcuslind')) {
+        styrka = 90;
+        skäl = 'bekräftat kvitto från Mötet (marcuslind)';
+      } else {
+        styrka = Math.min(35, grundStyrka - 35);
+        skäl = 'anteckningskommando saknar kvitto från Mötet (marcuslind)';
+      }
+    } else if (ärSammanfattning) {
+      if (källor.includes('marcuslind')) {
+        styrka = Math.min(100, grundStyrka + 15);
+        skäl = 'sammanfattning bekräftad av Mötet (marcuslind)';
+      } else {
+        styrka = Math.min(30, grundStyrka - 30);
+        skäl = 'sammanfattningsfråga saknar underlag från Mötet (marcuslind)';
+      }
+    } else if (källor.length === 0) {
       styrka = Math.max(5, grundStyrka - 25);
       skäl = 'inget bekräftande underlag i kedjan';
+    } else if (källor.length === 1) {
+      // En enskild källa (t.ex. bara Minnet) bekräftar svaret men saknar oberoende motpart
+      styrka = Math.min(65, grundStyrka);
+      skäl = `enstaka källa (${källor[0]}), saknar oberoende motpart`;
     } else {
+      // Flera oberoende källor i frågeträdet
       styrka = Math.min(100, grundStyrka + 10 * Math.min(källor.length, 3));
-      skäl = `bekräftat av ${källor.length} förmåga/förmågor: ${källor.join(', ')}`;
+      skäl = `oberoende bekräftat av ${källor.length} förmågor: ${källor.join(', ')}`;
     }
     const godkänt = styrka >= GODKÄND_GRÄNS;
 
