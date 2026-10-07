@@ -13,12 +13,32 @@
   .text{color:#c9d1d9;margin-top:2px}
   .tomt{color:#8b949e}
   .portratt{width:100%;max-width:220px;border-radius:6px;display:block;margin:0 auto 10px}
+  h2{color:#ffb454;font-size:13px;margin:14px 0 6px;letter-spacing:.06em}
+  .not li{border-left-color:#7aa2f7}
+  .fran{color:#7aa2f7}
+  form{display:flex;flex-direction:column;gap:6px}
+  select,textarea,button{font:inherit;background:#11151a;color:#e6e8eb;border:1px solid #30363d;border-radius:4px;padding:6px}
+  textarea{resize:vertical;min-height:48px}
+  button{cursor:pointer;color:#ffb454;border-color:#ffb454}
+  button:disabled{opacity:.5;cursor:default}
+  .sms-info{color:#8b949e;font-size:12px}
+  .sms li{border-left-color:#ffb454}
 </style></head>
 <body><div class="wrap">
   <h1>MÖTET</h1>
   <img id="portratt" class="portratt" style="display:none">
-  <p class="sub">sammanfattar en kanal när @kollegan blir ombedd</p>
+  <p class="sub">sammanfattar en kanal, sparar och hämtar anteckningar när @kollegan blir ombedd</p>
   <ul id="lista"><li class="tomt">inga sammanfattningar ännu</li></ul>
+  <h2>ANTECKNINGAR</h2>
+  <ul id="notlista" class="not"><li class="tomt">inga anteckningar ännu</li></ul>
+  <h2>SKICKA SMS</h2>
+  <form id="smsform">
+    <select id="smstill"></select>
+    <textarea id="smstext" placeholder="meddelande"></textarea>
+    <button id="smsknapp" type="submit">Skicka</button>
+    <span id="smsinfo" class="sms-info"></span>
+  </form>
+  <ul id="smslista" class="sms" style="margin-top:6px"></ul>
 </div>
 <script>
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -34,5 +54,48 @@ const visa = () => fetch('/t/marcuslind/sammanfattningar').then(r => r.json()).t
       <div class="text">${esc(p.sammanfattning)}</div>
     </li>`).join('');
 }).catch(() => {});
-visa(); setInterval(visa, 8000);
+const visaNoteringar = () => fetch('/t/marcuslind/anteckningar').then(r => r.json()).then(noteringar => {
+  const el = document.getElementById('notlista');
+  if (!noteringar.length) { el.innerHTML = '<li class="tomt">inga anteckningar ännu</li>'; return; }
+  el.innerHTML = noteringar.slice(0, 10).map(n => `
+    <li>
+      <div class="rad1"><span class="kanal">#${esc(n.kanal)}</span><span class="fran">${esc(n.från)}</span></div>
+      <div class="text">${esc(n.text)}</div>
+    </li>`).join('');
+}).catch(() => {});
+visa(); visaNoteringar(); setInterval(() => { visa(); visaNoteringar(); }, 8000);
+
+let valtAlias = '';
+const visaSms = () => fetch('/t/marcuslind/sms').then(r => r.json()).then(d => {
+  const sel = document.getElementById('smstill');
+  valtAlias = sel.value || valtAlias;
+  sel.innerHTML = d.mottagare.length
+    ? d.mottagare.map(a => `<option value="${esc(a)}"${a === valtAlias ? ' selected' : ''}>${esc(a)}</option>`).join('')
+    : '<option value="">inga mottagare på vitlistan</option>';
+  document.getElementById('smstext').maxLength = d.maxTecken;
+  document.getElementById('smsknapp').disabled = !d.mottagare.length || d.kvarDennaTimme === 0;
+  document.getElementById('smsinfo').textContent =
+    `${d.läge === 'test' ? 'testläge, inget skickas på riktigt' : 'skarpt läge'} · ${d.kvarDennaTimme} kvar denna timme`;
+  document.getElementById('smslista').innerHTML = d.senaste.map(s => `
+    <li><div class="rad1"><span class="kanal">${esc(s.till)}</span><span class="antal">${esc(s.status)}</span></div>
+    <div class="text">${esc(s.text)}</div></li>`).join('');
+}).catch(() => {});
+
+document.getElementById('smsform').addEventListener('submit', ev => {
+  ev.preventDefault();
+  const knapp = document.getElementById('smsknapp');
+  const text = document.getElementById('smstext');
+  knapp.disabled = true;
+  fetch('/t/marcuslind/sms', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ till: document.getElementById('smstill').value, text: text.value }),
+  }).then(r => r.json()).then(d => {
+    document.getElementById('smsinfo').textContent = d.fel ? `fel: ${d.fel}` : `${d.status} till ${d.till}`;
+    if (!d.fel) text.value = '';
+  }).catch(() => {
+    document.getElementById('smsinfo').textContent = 'kunde inte nå servern';
+  }).finally(() => setTimeout(visaSms, 1500));
+});
+visaSms(); setInterval(visaSms, 15000);
 </script></body></html>
