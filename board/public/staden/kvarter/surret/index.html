@@ -40,6 +40,7 @@
 const en = !/^sv/i.test(navigator.language || 'sv');
 if (en) document.getElementById('sub').textContent = "Kollegan's ear · ask @kollegan in any channel";
 const sett = new Set();
+const iRam = (() => { try { return window.top !== window.self; } catch { return true; } })();
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const tid = ts => new Date(ts).toTimeString().slice(0, 5);
 
@@ -69,7 +70,8 @@ async function visa() {
     document.getElementById('siffror').innerHTML = '<b>' + s.hört + '</b> ' + (en ? 'heard' : 'hörda') + '<br>'
       + s.besvarade + ' ' + (en ? 'answered' : 'besvarade') + ' · ' + s.väntar + ' ' + (en ? 'waiting' : 'väntar');
     const p = document.getElementById('portratt');
-    if (s.porträtt && s.porträtt.url && /^\/t\/[\w-]+\//.test(s.porträtt.url) && p.getAttribute('src') !== s.porträtt.url) {
+    // På /staden visar ramen redan porträttet som hero-bild, så bara fristående rutor visar sitt eget.
+    if (!iRam && s.porträtt && s.porträtt.url && /^\/t\/[\w-]+\//.test(s.porträtt.url) && p.getAttribute('src') !== s.porträtt.url) {
       p.src = s.porträtt.url; p.title = (en ? 'Portrait by ateljen: ' : 'Porträtt av ateljen: ') + (s.porträtt.prompt || '');
       p.alt = 'Örat'; p.style.display = 'block';
     }

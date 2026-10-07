@@ -3,7 +3,8 @@
 // Följer sedan kedjan (orsak) som andra förmågor bygger på frågan, så rutan på /staden kan visa
 // vart frågan tog vägen. Har ingen reagerat på tre minuter skickar Örat fråga.obesvarad.
 // fråga.ny bär frågans språk (sv/en). Samma fråga inom fem minuter får ingen ny kedja, bara en
-// hänvisning till den första. Ateljens bild.klar till surret visas som porträtt i rutan.
+// hänvisning till den första. Ateljens bild.klar till surret visas som porträtt i rutan när den
+// öppnas fristående (på /staden visar ramen redan porträttet).
 //
 //   GET /t/surret/fragor   → senaste frågorna med sina kedjor
 //   GET /t/surret/status   → siffror
