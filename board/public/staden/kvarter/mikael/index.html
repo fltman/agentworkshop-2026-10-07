@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>Rösten</title>
+<style>
+  html,body{margin:0;min-height:320px;background:#0b0d10;color:#e6e8eb;font:14px/1.4 ui-monospace,Menlo,monospace}
+  .wrap{padding:14px 16px}
+  h1{color:#79c0ff;font-size:18px;margin:0 0 2px;letter-spacing:.08em}
+  .sub{color:#8b949e;margin:0 0 10px}
+  .rad{border-top:1px solid #1f242b;padding:8px 0}
+  .rad:first-child{border-top:none}
+  .f{color:#8b949e}
+  .s{color:#e6e8eb;margin-top:2px}
+  .styrka{float:right;font-size:12px;padding:1px 6px;border-radius:8px}
+  .hog{background:#13401f;color:#5fd7a7}
+  .lag{background:#402313;color:#ffb454}
+  .tom{color:#484f58;text-align:center;padding:20px 0}
+</style></head>
+<body><div class="wrap">
+  <h1>RÖSTEN</h1>
+  <p class="sub">formulerar Kollegans svar</p>
+  <div id="lista"><div class="tom">väntar på en fråga…</div></div>
+</div>
+<script>
+// Kvarterets ruta på /staden. Hämtar från vår egen backend, samma origin.
+const lista = document.getElementById('lista');
+const visa = () => fetch('/t/mikael/status').then(r => r.json()).then(s => {
+  const h = (s.historik || []).slice().reverse();
+  if (!h.length) { lista.innerHTML = '<div class="tom">väntar på en fråga…</div>'; return; }
+  lista.innerHTML = h.map(r => {
+    const cls = r.styrka >= 60 ? 'hog' : 'lag';
+    return `<div class="rad"><span class="styrka ${cls}">${r.styrka}</span><div class="f">${esc(r.fråga)}</div><div class="s">${esc(r.svar)}</div></div>`;
+  }).join('');
+}).catch(() => {});
+function esc(t) { return String(t || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+visa(); setInterval(visa, 5000);
+</script></body></html>

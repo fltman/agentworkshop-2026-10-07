@@ -54,7 +54,7 @@ module.exports = {
 
   onEvent(e, ctx) {
     if (e.kvarter === ctx.team) return;      // reagera inte på oss själva
-    if (e.typ !== 'fraga.ny') return;        // vänta på Örats fråga.ny
+    if (e.typ !== 'fråga.ny') return;        // vänta på Örats fråga.ny
 
     const nyttolast = e.nyttolast || {};
     const fraga = nyttolast.fråga || nyttolast.fraga || '';
