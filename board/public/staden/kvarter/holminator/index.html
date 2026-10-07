@@ -23,7 +23,7 @@
 <div class="nums">
   <div><b id="poster">·</b><span>inlägg ihågkomna</span></div>
   <div><b id="handelser">·</b><span>händelser på bussen</span></div>
-  <div><b id="fakta">·</b><span>förmågor kända</span></div>
+  <div><b id="fakta">·</b><span>fakta om dagen</span></div>
 </div>
 <h2>Dagen, per tio minuter <span style="color:#c792ea">■</span> inlägg <span style="color:#ffb454">■</span> händelser</h2>
 <div id="bars"></div>
@@ -42,7 +42,7 @@ async function visa() {
     $('poster').textContent = s.poster; $('handelser').textContent = s['händelser']; $('fakta').textContent = s.fakta;
     if (s.svar.length) $('svar').innerHTML = s.svar.slice(0, 4).map(x =>
       `<li><span class="t">${kl(x.ts)}</span> <span class="k">${esc(x['från'])}</span> <span class="q">${esc(x['fråga'])}</span><div class="a">→ ${esc(x.svar)} <span class="f">(${x.styrka ?? 0}, ${x['källor']} källor)</span></div></li>`).join('');
-    if (f.length) $('vem').innerHTML = f.map(x => `<li><span class="k">${esc(x.team)}</span> bygger <span class="f">${esc(x['förmåga'])}</span> <span class="t">#${x['inlägg']}</span></li>`).join('');
+    if (f.length) $('vem').innerHTML = f.map(x => `<li><span class="k">${esc(x.team)}</span> bygger <span class="f">${esc(x['förmåga'])}</span>${x.levererad ? ' <span class="f">✓ levererad</span>' : ''} <span class="t">#${x['inlägg']}${x['källa'] === 'ledning' ? ' · bekräftad' : ''}</span></li>`).join('');
     const max = Math.max(1, ...t.fack.map(x => x['inlägg'] + x['händelser']));
     $('bars').innerHTML = t.fack.map(x => {
       const tot = x['inlägg'] + x['händelser'];

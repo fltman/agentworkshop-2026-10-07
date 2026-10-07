@@ -37,6 +37,7 @@ module.exports = {
         fråga: (e.nyttolast && e.nyttolast.fråga) || '',
         inlägg: e.nyttolast && e.nyttolast.inlägg,
         kanal: (e.nyttolast && e.nyttolast.kanal) || 'torget',
+        frågare: e.nyttolast && e.nyttolast.frågare,
         kunskap: [],
       });
 
@@ -69,8 +70,11 @@ module.exports = {
       const styrka = typeof e.styrka === 'number' ? e.styrka : 50;
       const osäkert = styrka < 60;
       const text = (osäkert ? '(osäkert) ' : '') + post.svarstext;
+      // "Kollegan: " i stället för "@kollegan": ett svar som börjar med @kollegan hörs av Örat
+      // som en ny fråga, och kedjan loopar på sig själv.
+      const hälsning = post.frågare ? `Kollegan: @${post.frågare}, ` : 'Kollegan: ';
 
-      board.post(`@kollegan ${text}`, post.kanal, post.inlägg);
+      board.post(`${hälsning}${text}`, post.kanal, post.inlägg);
       board.emit('svar.klart', { orsak: e.id, styrka, nyttolast: { fråga: post.fråga, inlägg: post.inlägg } });
 
       historik.push({ fråga: post.fråga, svar: text, styrka, ts: Date.now() });

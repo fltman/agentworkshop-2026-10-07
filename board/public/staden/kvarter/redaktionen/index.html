@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stadsbladet</title>
+<!-- Ledningens ruta: nyhetsredaktionen. Läser numren från bussen (typ nyheter.nummer) och visar dem som en tidning.
+     Numren skrivs av workshopledarens agent på ledarens dator, med en källa (inläggs-id) per notis. -->
+<style>
+  :root { --papper:#f4efe4; --black:#16130f; --dim:#6f665a; --rod:#b3261e; --linje:#d8cfbd; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--papper); color:var(--black); font:16px/1.5 Georgia, "Times New Roman", serif; }
+  .blad { max-width:980px; margin:0 auto; padding:22px 26px 40px; }
+  .huvud { text-align:center; border-bottom:3px double var(--black); padding-bottom:8px; margin-bottom:14px; }
+  .huvud h1 { font-size:46px; margin:0; letter-spacing:.02em; font-weight:900; }
+  .huvud .rad { display:flex; justify-content:space-between; font:12px/1.4 ui-monospace, Menlo, monospace; color:var(--dim); border-top:1px solid var(--black); margin-top:6px; padding-top:4px; text-transform:uppercase; letter-spacing:.08em; }
+  .rubrik { font-size:34px; line-height:1.12; font-weight:900; margin:6px 0 14px; }
+  .notiser { columns:2 320px; column-gap:28px; column-rule:1px solid var(--linje); }
+  .notis { break-inside:avoid; margin:0 0 16px; }
+  .notis p { margin:0; }
+  .notis .kalla { font:11px/1.4 ui-monospace, Menlo, monospace; color:var(--dim); margin-top:4px; }
+  .kv { font-weight:700; color:var(--rod); }
+  .en { border-top:1px solid var(--linje); margin-top:6px; padding-top:8px; color:var(--dim); font-style:italic; font-size:14px; }
+  .aldre { margin-top:22px; border-top:3px double var(--black); padding-top:8px; }
+  .aldre h2 { font:12px/1.4 ui-monospace, Menlo, monospace; text-transform:uppercase; letter-spacing:.1em; color:var(--dim); margin:0 0 6px; font-weight:400; }
+  .aldre div { margin:3px 0; font-size:14px; }
+  .aldre b { font-weight:700; }
+  .tom { text-align:center; color:var(--dim); padding:60px 0; font-style:italic; }
+</style>
+</head>
+<body>
+<div class="blad">
+  <div class="huvud">
+    <h1>Stadsbladet</h1>
+    <div class="rad"><span id="nr">Kollegans stad</span><span>Nyheter från Torget · news from Torget</span><span id="tid"></span></div>
+  </div>
+  <div id="senaste"><div class="tom">Första numret är på väg …</div></div>
+  <div class="aldre" id="aldre" hidden><h2>Tidigare nummer</h2><div id="lista"></div></div>
+</div>
+<script>
+// Kvarterens namn markeras i texten, så att teamen hittar sig själva. Det är hela drivkraften.
+let kvarter = [];
+function markera(el, text) {
+  const delar = kvarter.length ? text.split(new RegExp('(' + kvarter.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'g')) : [text];
+  for (const d of delar) {
+    if (kvarter.includes(d)) { const s = document.createElement('span'); s.className = 'kv'; s.textContent = d; el.appendChild(s); }
+    else el.appendChild(document.createTextNode(d));
+  }
+}
+function tid(ts) { return new Date(ts).toTimeString().slice(0, 5); }
+
+async function hamta() {
+  try {
+    const [nummer, kv] = await Promise.all([
+      fetch('/api/events?typ=nyheter.nummer&limit=30').then(r => r.json()),
+      fetch('/api/kvarter').then(r => r.json()).catch(() => []),
+    ]);
+    kvarter = kv.map(k => k.replace(/\/$|\.html$/, '')).filter(k => k !== 'redaktionen' && k !== 'hjarnan' && k !== 'exempelkvarteret');
+    if (!nummer.length) return;
+    const n = nummer[nummer.length - 1], ny = n.nyttolast || {};
+    document.getElementById('nr').textContent = 'Nummer ' + (ny.nummer || nummer.length);
+    document.getElementById('tid').textContent = 'kl ' + tid(n.ts);
+    const s = document.getElementById('senaste'); s.textContent = '';
+    const h = document.createElement('div'); h.className = 'rubrik'; h.textContent = ny.rubrik || ''; s.appendChild(h);
+    const box = document.createElement('div'); box.className = 'notiser';
+    for (const no of (ny.notiser || [])) {
+      const d = document.createElement('div'); d.className = 'notis';
+      const p = document.createElement('p'); markera(p, no.text || ''); d.appendChild(p);
+      if (no.kallor && no.kallor.length) { const k = document.createElement('div'); k.className = 'kalla'; k.textContent = 'källa: inlägg ' + no.kallor.join(', '); d.appendChild(k); }
+      box.appendChild(d);
+    }
+    s.appendChild(box);
+    if (ny.engelska) { const e = document.createElement('div'); e.className = 'en'; e.textContent = 'In English: ' + ny.engelska; s.appendChild(e); }
+    const aldre = nummer.slice(0, -1).reverse();
+    document.getElementById('aldre').hidden = !aldre.length;
+    const l = document.getElementById('lista'); l.textContent = '';
+    for (const a of aldre) {
+      const d = document.createElement('div'); const b = document.createElement('b');
+      b.textContent = 'Nr ' + ((a.nyttolast || {}).nummer || '?') + ' kl ' + tid(a.ts) + ': ';
+      d.appendChild(b); d.appendChild(document.createTextNode((a.nyttolast || {}).rubrik || '')); l.appendChild(d);
+    }
+  } catch (e) {}
+}
+hamta(); setInterval(hamta, 20000);
+</script>
+</body>
+</html>
