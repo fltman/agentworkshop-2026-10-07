@@ -217,3 +217,140 @@ test('HTTP: /status, /tidslinje, /sok, okänd väg och POST', async () => {
   assert.equal(await m.mod.handle({ method: 'POST' }, {}, { path: '/sok', url: new URL('http://x/') }), false);
   assert.equal(m.skickat.length, 0, '/sok skickar inget på bussen');
 });
+
+test('leverans för en namngiven förmåga, inte hela listan', () => {
+  const m = nyttMinne(torget());
+  const a = m.fraga('vem bygger rösten, och har de levererat?');
+  assert.equal(a.nyttolast.svar, 'mikael bygger Rösten och har inte levererat än.');
+  const b = m.fraga('har minnet levererat?');
+  assert.match(b.nyttolast.svar, /^holminator \(Minnet\) levererade \d\d:\d\d PR 7\.$/);
+  assert.doesNotMatch(b.nyttolast.svar, /team har levererat/);
+});
+
+// Krockar: två team som ropar samma förmåga.
+const krockar = m => m.get('/krockar');
+
+test('krock vid inläsning registreras, köas inte, och löses av ledningens lägesrad', async () => {
+  const m = nyttMinne(torget());
+  const k = await krockar(m);
+  assert.equal(k.length, 1);
+  assert.equal(k[0].förmåga, 'Örat');
+  assert.equal(k[0].team, 'babtist');
+  assert.equal(k[0].hos, 'surret');
+  assert.deepEqual(k[0].löst.team, 'surret', 'ledningen skrev Örat: surret');
+  const s = await m.get('/status');
+  assert.equal(s.krockar, 0);
+  assert.equal(s.kö, 0, 'inlästa krockar skickas inte som kunskap.ny');
+});
+
+test('ny krock i drift: kunskap.ny, svar på fråga, ingen dubbelrapport', async () => {
+  const m = nyttMinne(torget());
+  m.mod.onMessage(post('heimlen', 'bygge', 'heimlen tar förmågan Minnet.'), m.ctx);
+  m.mod.onMessage(post('heimlen', 'bygge', 'heimlen tar förmågan Minnet, igen.'), m.ctx);
+  const s = await m.get('/status');
+  assert.equal(s.krockar, 1);
+  assert.equal(s.kö, 1, 'en rapport, inte två');
+  const fakta = await m.get('/fakta');
+  assert.equal(fakta.find(f => f.förmåga === 'Minnet').team, 'holminator', 'först till kvarn');
+  const svar = m.fraga('finns det några krockar?');
+  assert.match(svar.nyttolast.svar, /heimlen ropade Minnet, som holminator redan har/);
+  assert.equal(svar.styrka, 80);
+  assert.equal(svar.nyttolast.källor[0].från, 'heimlen');
+});
+
+test('krocken skickas på bussen av timern, en i taget', t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const m = nyttMinne(torget());
+  m.mod.onMessage(post('heimlen', 'bygge', 'heimlen tar förmågan Minnet.'), m.ctx);
+  m.mod.onMessage(post('release-agenten', 'bygge', 'PR inne från mikael: https://github.com/x/y/pull/10'), m.ctx);
+  assert.equal(m.skickat.length, 0);
+  t.mock.timers.tick(15000);
+  assert.equal(m.skickat.length, 1);
+  const h = m.skickat[0];
+  assert.equal(h.typ, 'kunskap.ny');
+  assert.equal(h.styrka, 60);
+  assert.deepEqual({ ...h.nyttolast.krock, inlägg: 0, först: 0 }, { förmåga: 'Minnet', team: 'heimlen', hos: 'holminator', inlägg: 0, först: 0 });
+  assert.match(h.nyttolast.fakta, /^Krock: heimlen ropade Minnet/);
+  t.mock.timers.tick(15000);
+  assert.equal(m.skickat.length, 2);
+  assert.match(m.skickat[1].nyttolast.fakta, /mikael har levererat PR 10/);
+  t.mock.timers.tick(15000);
+  assert.equal(m.skickat.length, 2, 'tom kö skickar inget');
+});
+
+test('krock löses när ledningen avgör, och kan uppstå igen efteråt', async () => {
+  const m = nyttMinne(torget());
+  m.mod.onMessage(post('heimlen', 'bygge', 'heimlen tar förmågan Minnet.'), m.ctx);
+  m.mod.onMessage(post('ledarens-agent', 'bygge', 'Läget:\nMinnet: holminator'), m.ctx);
+  assert.equal((await m.get('/status')).krockar, 0);
+  assert.match(m.fraga('några krockar?').nyttolast.svar, /inga öppna krockar, 2 är lösta/);
+  m.mod.onMessage(post('heimlen', 'bygge', 'heimlen tar förmågan Minnet ändå.'), m.ctx);
+  assert.equal((await m.get('/status')).krockar, 1, 'nytt anspråk efter beslutet är en ny krock');
+});
+
+test('ledningen kan ge förmågan till den som ropade sist', async () => {
+  const m = nyttMinne(torget());
+  m.mod.onMessage(post('heimlen', 'bygge', 'heimlen tar förmågan Kön.'), m.ctx);
+  m.mod.onMessage(post('ledarens-agent', 'bygge', 'Kön: heimlen'), m.ctx);
+  const fakta = await m.get('/fakta');
+  assert.equal(fakta.find(f => f.förmåga === 'Kön').team, 'heimlen');
+  const k = (await krockar(m)).find(x => x.förmåga === 'Kön');
+  assert.equal(k.löst.team, 'heimlen');
+});
+
+test('krock löses när teamet byter till en annan förmåga', async () => {
+  const m = nyttMinne(torget());
+  m.mod.onMessage(post('heimlen', 'bygge', 'heimlen tar förmågan Minnet.'), m.ctx);
+  m.mod.onMessage(post('heimlen', 'bygge', 'Okej, heimlen tar förmågan Granskaren i stället.'), m.ctx);
+  const k = (await krockar(m)).find(x => x.team === 'heimlen');
+  assert.equal(k.löst.bytte, 'Granskaren');
+  assert.equal((await m.get('/status')).krockar, 0);
+});
+
+test('samma team som ropar sin egen förmåga igen är ingen krock', async () => {
+  const m = nyttMinne(torget());
+  m.mod.onMessage(post('mikael', 'bygge', 'mikael tar förmågan Rösten, v2.'), m.ctx);
+  assert.equal((await m.get('/status')).krockar, 0);
+  assert.equal((await m.get('/status')).kö, 0);
+});
+
+test('krockfråga utan krockar och engelsk krockfråga', () => {
+  id = 0;
+  const m = nyttMinne([post('mikael', 'bygge', 'mikael tar förmågan Rösten.')]);
+  const a = m.fraga('finns det krockar?');
+  assert.equal(a.nyttolast.svar, 'Minnet ser inga öppna krockar.');
+  m.mod.onMessage(post('leif', 'bygge', 'leif takes the voice'), m.ctx);
+  assert.match(m.fraga('any conflict over the voice?').nyttolast.svar, /leif ropade Rösten, som mikael redan har/);
+});
+
+// Fall från livetestet 10:08 (inlägg 324 och 362).
+test('"vilka team har levererat" listar alla, ordet "team" pekar inte ut team-martin', () => {
+  const p = torget();
+  p.push(post('release-agenten', 'bygge', 'PR inne från team-martin: https://github.com/x/y/pull/8'));
+  const m = nyttMinne(p);
+  const s = m.fraga('@kollegan vilka team har levererat hittills?');
+  assert.match(s.nyttolast.svar, /^2 team har levererat: holminator \(Minnet\).*team-martin \(Pulsen\)/);
+  assert.match(m.fraga('har team-martin levererat?').nyttolast.svar, /^team-martin \(Pulsen\) levererade/);
+  assert.match(m.fraga('vem i teamet bygger rösten?').nyttolast.svar, /^mikael bygger Rösten/);
+});
+
+test('händelsetyper i frågan tolkas inte som avsikt, okänt kvarter besvaras med dess signal', () => {
+  const h = [{ id: 600, ts: Date.now() - 30000, typ: 'bild.klar', kvarter: 'ateljen', styrka: 50, nyttolast: { till: 'surret' } }];
+  const m = nyttMinne(torget(), h);
+  const s = m.fraga('@kollegan ateljen har precis börjat skicka bild.klar. Vad bygger ateljen, och vem lyssnar på dem?');
+  assert.doesNotMatch(s.nyttolast.svar, /levererat|förmågor är tagna/);
+  assert.match(s.nyttolast.svar, /ateljen bild\.klar/);
+  assert.equal(s.nyttolast.källor[0].från, 'ateljen');
+});
+
+test('mallfrågor om olika saker får ingen "samma fråga"-not, riktig upprepning får det', () => {
+  const h = [{ id: 601, ts: Date.now() - 30000, typ: 'bild.klar', kvarter: 'ateljen', nyttolast: {} },
+    { id: 602, ts: Date.now() - 20000, typ: 'karta.ritad', kvarter: 'leiost', nyttolast: {} }];
+  const m = nyttMinne(torget(), h);
+  m.fraga('ateljen har precis börjat skicka bild.klar. Vad bygger ateljen, och vem lyssnar på dem?');
+  const b = m.fraga('leiost har precis börjat skicka karta.ritad. Vad bygger leiost, och vem lyssnar på dem?');
+  assert.match(b.nyttolast.svar, /leiost karta\.ritad/);
+  assert.doesNotMatch(b.nyttolast.svar, /Samma fråga/);
+  const c = m.fraga('leiost har precis börjat skicka karta.ritad. Vad bygger leiost, och vem lyssnar?');
+  assert.match(c.nyttolast.svar, /Samma fråga ställdes/);
+});
