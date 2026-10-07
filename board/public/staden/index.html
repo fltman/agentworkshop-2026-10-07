@@ -20,6 +20,14 @@
   /* Rubrikraden: namnet ligger ovanför rutan, inte ovanpå den. Hörnen är kvarterets egna. */
   .k .bar { display:flex; align-items:center; gap:10px; padding:7px 12px; border-bottom:1px solid var(--line); font-size:12px; color:var(--dim); flex:none; }
   .k .bar b { color:var(--fg); font-weight:600; letter-spacing:.04em; }
+  /* Ateljéns porträtt som hero-bild överst i rutan, med namn och förmåga. Döljs tills det finns ett,
+     och i helskärm, där kvarterets eget innehåll ska ha hela ytan. */
+  .k .hero { display:none; height:150px; background:#0b0e13 center 42% / cover no-repeat; position:relative; flex:none; border-bottom:1px solid var(--line); }
+  .k .hero.har { display:block; }
+  .k .hero .titel { position:absolute; left:0; right:0; bottom:0; padding:30px 14px 10px; background:linear-gradient(rgba(11,13,16,0), rgba(11,13,16,.94)); }
+  .k .hero .titel b { display:block; font-size:19px; color:#fff; letter-spacing:.04em; }
+  .k .hero .titel span { color:#5fd7a7; font-size:12px; letter-spacing:.06em; text-transform:uppercase; }
+  .k.stor .hero { display:none; }
   .k .bar .sp { margin-left:auto; }
   .k .bar a, .k .bar button { color:var(--dim); background:none; border:0; font:inherit; cursor:pointer; text-decoration:none; padding:2px 6px; border-radius:5px; }
   .k .bar a:hover, .k .bar button:hover { color:var(--fg); background:#1b2027; }
@@ -65,7 +73,8 @@ function kort(k) {
   const d = document.createElement('section'); d.className = 'k'; d.dataset.team = t;
   // allow-forms: utan den sväljs submit i kvarterens egna formulär, och teamen bygger om sina
   // knappar i onödan. Det kostade en förmiddag förra gången.
-  d.innerHTML = '<div class="bar"><b>' + esc(t) + '</b><span class="sp"></span>'
+  d.innerHTML = '<div class="hero"><div class="titel"><b>' + esc(t) + '</b><span class="formaga"></span></div></div>'
+    + '<div class="bar"><b>' + esc(t) + '</b><span class="sp"></span>'
     + '<a href="/t/' + encodeURIComponent(t) + '/" target="_blank" title="' + esc(T.backend) + '">/t/' + esc(t) + '</a>'
     + '<a href="' + url + '" target="_blank" title="' + esc(T.flik) + '">↗</a>'
     + '<button title="' + esc(T.stor) + '">⤢</button></div>'
@@ -107,6 +116,23 @@ async function load() {
   if (!list.length) m.innerHTML = '<div class="tom">' + esc(T.tom) + '</div>';
 }
 load(); setInterval(load, 20000);
+
+// Porträtten från Ateljén blir hero-bild i varje ruta. Ett nytt porträtt (nytt ts) byter bilden.
+async function ansikten() {
+  try {
+    const lista = await fetch('/t/ateljen/lista').then(r => r.json());
+    for (const b of lista) {
+      if (b.typ !== 'portratt') continue;
+      for (const [k, d] of seen) {
+        if (namn(k) !== b.kvarter) continue;
+        const hero = d.querySelector('.hero'), src = b.url + '?v=' + b.ts;
+        if (hero && hero.dataset.src !== src) { hero.dataset.src = src; hero.style.backgroundImage = 'url("' + src + '")'; hero.classList.add('har'); hero.title = b.prompt || ''; }
+        const f = d.querySelector('.hero .formaga'); if (f && b.formaga) f.textContent = b.formaga;
+      }
+    }
+  } catch (e) {}
+}
+setTimeout(ansikten, 1500); setInterval(ansikten, 30000);
 
 // Efter en deploy har kvarteren ny kod, men iframarna sitter kvar med den gamla. Servern byter
 // startad vid varje omstart: då laddar sidan om sig, så storskärmen aldrig visar en gammal stad.
