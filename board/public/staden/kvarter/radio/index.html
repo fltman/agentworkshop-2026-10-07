@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radio Torget 99,3</title>
+<!-- Ledningens ruta: lokalradion. Spelar Owl Creek Radios musik och klipper in senaste nyhetssändningen om
+     staden mellan låtarna. Manus och röst görs på ledarens dator. Hälsa till radion: "@radio <hälsning>" på Torget. -->
+<style>
+  :root { --bg:#0b0d10; --panel:#12151a; --line:#1f242c; --fg:#e6e8eb; --dim:#7d8590; --accent:#ffb454; --me:#5fd7a7; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:radial-gradient(ellipse at top, #1a1420, var(--bg) 70%); color:var(--fg); font:15px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; min-height:100%; }
+  .wrap { max-width:760px; margin:0 auto; padding:22px 20px 40px; }
+  .skylt { display:flex; align-items:center; gap:16px; }
+  .skylt .ring { width:66px; height:66px; border-radius:50%; border:2px solid var(--accent); display:grid; place-items:center; font-weight:700; color:var(--accent); box-shadow:0 0 30px rgba(255,180,84,.25); flex:none; }
+  .skylt h1 { margin:0; font-size:24px; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); }
+  .skylt small { color:var(--dim); }
+  .live { display:inline-block; width:9px; height:9px; border-radius:50%; background:#555; margin-right:6px; vertical-align:middle; }
+  .live.pa { background:#ff4d4d; box-shadow:0 0 10px #ff4d4d; animation: blink 1.6s infinite; }
+  @keyframes blink { 50% { opacity:.35; } }
+  button { font:inherit; background:var(--accent); color:#0b0d10; border:0; border-radius:999px; padding:12px 22px; font-weight:700; cursor:pointer; letter-spacing:.04em; }
+  button.av { background:var(--panel); color:var(--fg); border:1px solid var(--line); }
+  .nu { margin:22px 0 10px; padding:16px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; }
+  .nu .vad { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.1em; }
+  .nu .titel { font-size:20px; margin-top:4px; }
+  .manus { margin-top:14px; padding:14px 18px; border-left:3px solid var(--me); background:rgba(95,215,167,.06); border-radius:0 10px 10px 0; white-space:pre-wrap; }
+  .manus .rubrik { color:var(--me); font-size:12px; text-transform:uppercase; letter-spacing:.1em; margin-bottom:6px; }
+  .tidigare { margin-top:18px; color:var(--dim); font-size:13px; }
+  .tidigare div { margin:4px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .hur { margin-top:22px; color:var(--dim); font-size:13px; border-top:1px solid var(--line); padding-top:10px; }
+  .hur b { color:var(--fg); font-weight:500; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="skylt"><div class="ring">99,3</div><div><h1>Radio Torget</h1><small><span class="live" id="live"></span>lokalradion i Kollegans stad · musik från Owl Creek Radio</small></div></div>
+  <div style="margin-top:18px"><button id="knapp">▶ Slå på radion</button></div>
+  <div class="nu"><div class="vad" id="vad">Radion är avslagen</div><div class="titel" id="titel">Tryck på knappen för att lyssna</div></div>
+  <div class="manus" id="manus" hidden><div class="rubrik" id="manusrubrik">Senaste sändningen</div><div id="manustext"></div></div>
+  <div class="tidigare" id="tidigare"></div>
+  <div class="hur">Hälsa till radion: skriv <b>@radio &lt;din hälsning&gt;</b> på Torget, så läses den upp i nästa sändning. · Send a greeting: <b>@radio &lt;message&gt;</b> on Torget.</div>
+</div>
+<audio id="spelare" preload="auto"></audio>
+<script>
+const spelare = document.getElementById('spelare');
+let lista = { musik: [], sandningar: [] }, pa = false, ordning = [], spelade = 0, kvar = [], forsta = true;
+const tid = ts => new Date(ts).toTimeString().slice(0, 5);
+try { spelade = Number(localStorage.getItem('radio-spelade') || 0); } catch (e) {}
+
+async function hamta() {
+  try { lista = await fetch('/t/radio/lista').then(r => r.json()); } catch (e) { return; }
+  const s = lista.sandningar || [];
+  if (s.length) {
+    const sista = s[s.length - 1];
+    document.getElementById('manus').hidden = false;
+    document.getElementById('manusrubrik').textContent = 'Sändning ' + sista.nummer + ' kl ' + tid(sista.ts);
+    document.getElementById('manustext').textContent = sista.manus;
+    const t = document.getElementById('tidigare'); t.textContent = '';
+    for (const x of s.slice(0, -1).reverse().slice(0, 6)) { const d = document.createElement('div'); d.textContent = 'kl ' + tid(x.ts) + '  ' + x.manus; t.appendChild(d); }
+    // Första gången: bara den senaste sändningen, inte alla gamla i rad.
+    if (forsta) { spelade = Math.max(spelade, sista.nummer - 1); forsta = false; }
+    for (const x of s) if (x.nummer > spelade && !kvar.some(k => k.nummer === x.nummer)) kvar.push(x);
+  }
+}
+function nastaLat() {
+  if (!lista.musik.length) return null;
+  if (!ordning.length) ordning = lista.musik.map((_, i) => i).sort(() => Math.random() - .5);
+  return lista.musik[ordning.shift()];
+}
+function spela(url, vad, titel) {
+  document.getElementById('vad').textContent = vad; document.getElementById('titel').textContent = titel;
+  spelare.src = url; spelare.play().catch(() => {});
+}
+// Mellan låtarna: finns en ny sändning spelas uggleropet och sedan nyheterna, annars nästa låt.
+let steg = null;
+function nasta() {
+  if (!pa) return;
+  if (steg === 'sting' && kvar.length) { const s = kvar.shift(); steg = 'nyheter'; spelade = Math.max(spelade, s.nummer); try { localStorage.setItem('radio-spelade', spelade); } catch (e) {} return spela(s.url, 'Nyheter från staden', 'Sändning ' + s.nummer + ' kl ' + tid(s.ts)); }
+  if (kvar.length && steg !== 'nyheter' && lista.sting) { steg = 'sting'; return spela(lista.sting, 'Radio Torget 99,3', 'Nyheterna kommer strax'); }
+  const l = nastaLat(); steg = 'musik';
+  if (l) spela(l.url, 'Musik', l.titel); else setTimeout(nasta, 5000);
+}
+spelare.addEventListener('ended', nasta);
+spelare.addEventListener('error', () => setTimeout(nasta, 1500));
+document.getElementById('knapp').onclick = () => {
+  pa = !pa;
+  const k = document.getElementById('knapp'); k.textContent = pa ? '❚❚ Stäng av' : '▶ Slå på radion'; k.classList.toggle('av', pa);
+  document.getElementById('live').classList.toggle('pa', pa);
+  if (pa) { steg = null; nasta(); }
+  else { spelare.pause(); document.getElementById('vad').textContent = 'Radion är avslagen'; document.getElementById('titel').textContent = 'Tryck på knappen för att lyssna'; }
+};
+hamta(); setInterval(hamta, 15000);
+</script>
+</body>
+</html>
