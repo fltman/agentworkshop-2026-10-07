@@ -1,38 +1,31 @@
 <!doctype html>
-<html lang="sv"><head><meta charset="utf-8"><title>Granskaren</title>
+<html lang="sv"><head><meta charset="utf-8"><title>Mötet</title>
 <style>
   html,body{margin:0;min-height:320px;background:#0b0d10;color:#e6e8eb;font:14px/1.4 ui-monospace,Menlo,monospace}
   .wrap{padding:14px 16px}
   h1{color:#ffb454;font-size:18px;margin:0 0 4px;letter-spacing:.08em}
   .sub{color:#8b949e;margin:0 0 12px}
   ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
-  li{border-left:3px solid #30363d;padding:6px 10px;background:#11151a;border-radius:4px}
-  li.godkänd{border-color:#5fd7a7}
-  li.nedjusterad{border-color:#ffb454}
-  li.avvisad{border-color:#f47067}
+  li{border-left:3px solid #5fd7a7;padding:6px 10px;background:#11151a;border-radius:4px}
   .rad1{display:flex;justify-content:space-between;color:#c9d1d9}
-  .bedomning{text-transform:uppercase;font-size:11px;letter-spacing:.06em}
-  .godkänd .bedomning{color:#5fd7a7}
-  .nedjusterad .bedomning{color:#ffb454}
-  .avvisad .bedomning{color:#f47067}
-  .styrka{color:#8b949e}
-  .motivering{color:#8b949e;margin-top:2px}
+  .kanal{color:#5fd7a7}
+  .antal{color:#8b949e}
+  .text{color:#c9d1d9;margin-top:2px}
   .tomt{color:#8b949e}
 </style></head>
 <body><div class="wrap">
-  <h1>GRANSKAREN</h1>
-  <p class="sub">kollar svar från andra kvarter innan de går vidare</p>
-  <ul id="lista"><li class="tomt">inga granskningar ännu</li></ul>
+  <h1>MÖTET</h1>
+  <p class="sub">sammanfattar en kanal när @kollegan blir ombedd</p>
+  <ul id="lista"><li class="tomt">inga sammanfattningar ännu</li></ul>
 </div>
 <script>
-const visa = () => fetch('/t/marcuslind/granskningar').then(r => r.json()).then(poster => {
+const visa = () => fetch('/t/marcuslind/sammanfattningar').then(r => r.json()).then(poster => {
   const el = document.getElementById('lista');
-  if (!poster.length) { el.innerHTML = '<li class="tomt">inga granskningar ännu</li>'; return; }
-  el.innerHTML = poster.slice(0, 12).map(p => `
-    <li class="${p.bedomning}">
-      <div class="rad1"><span>${p.kvarter}</span><span class="bedomning">${p.bedomning}</span></div>
-      <div class="styrka">styrka ${p.styrka}</div>
-      <div class="motivering">${p.motivering}</div>
+  if (!poster.length) { el.innerHTML = '<li class="tomt">inga sammanfattningar ännu</li>'; return; }
+  el.innerHTML = poster.slice(0, 10).map(p => `
+    <li>
+      <div class="rad1"><span class="kanal">#${p.kanal}</span><span class="antal">${p.antalInlägg} inlägg</span></div>
+      <div class="text">${p.sammanfattning}</div>
     </li>`).join('');
 }).catch(() => {});
 visa(); setInterval(visa, 8000);

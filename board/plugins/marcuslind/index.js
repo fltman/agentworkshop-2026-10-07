@@ -1,22 +1,22 @@
-// Granskaren, marcuslinds förmåga i Kollegan.
-//   Lyssnar på svar.klart / svar.utkast från andra team (Rösten) och granskar dem innan de går vidare:
-//   finns en källa (orsak) att spåra svaret till, och håller styrkan vad innehållet faktiskt visar?
-//   Skickar svar.granskat med en (ofta nedjusterad) styrka och en kort motivering, så granskningen
-//   syns i kedjan utan att Granskaren själv postar på Torget.
+// Mötet, marcuslinds förmåga i Kollegan.
+//   Lyssnar på fråga.ny från Örat (surret) och reagerar bara när frågan ber om en sammanfattning,
+//   t.ex. "@kollegan sammanfatta #bygge". Läser kanalens historik via board.query och skickar
+//   sammanfattning.klar med en kort översikt, som Rösten kan bygga svaret utifrån.
 //
-//   GET /t/marcuslind/granskningar   → de senaste granskningarna, för rutan på /staden
-//
-// Ett svar utan spårbar källa (ingen orsak-kedja) eller utan synligt svarsinnehåll bedöms lägre,
-// så kedjan blir ärligare än den enskilda Rösten hävdar.
+//   GET /t/marcuslind/sammanfattningar   → de senaste sammanfattningarna, för rutan på /staden
 
-const MAX_HISTORIK = 50;
+const MAX_HISTORIK = 30;
+
+function fil(ctx) {
+  const path = require('path');
+  return path.join(ctx.dataDir, 'sammanfattningar.json');
+}
 
 function lasHistorik(ctx) {
   try {
     const fs = require('fs');
-    const path = require('path');
-    const fil = path.join(ctx.dataDir, 'granskningar.json');
-    if (fs.existsSync(fil)) return JSON.parse(fs.readFileSync(fil, 'utf8'));
+    const f = fil(ctx);
+    if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
   } catch (e) { console.error('[marcuslind] läs historik:', e.message); }
   return [];
 }
@@ -24,43 +24,26 @@ function lasHistorik(ctx) {
 function sparaHistorik(ctx, historik) {
   try {
     const fs = require('fs');
-    const path = require('path');
-    const fil = path.join(ctx.dataDir, 'granskningar.json');
-    fs.writeFileSync(fil, JSON.stringify(historik.slice(-MAX_HISTORIK), null, 2));
+    fs.writeFileSync(fil(ctx), JSON.stringify(historik.slice(-MAX_HISTORIK), null, 2));
   } catch (e) { console.error('[marcuslind] spara historik:', e.message); }
 }
 
-function granska(e) {
-  const nyttolast = e.nyttolast || {};
-  const harSvarstext = typeof nyttolast.svar === 'string' && nyttolast.svar.trim().length > 0;
-  const harSparbarKalla = typeof e.orsak === 'number';
-  const paststaddStyrka = typeof e.styrka === 'number' ? e.styrka : 50;
+function hittaKanal(fraga, standard) {
+  const m = /#([a-zåäö0-9-]+)/i.exec(fraga || '');
+  return (m ? m[1] : standard || 'torget').toLowerCase();
+}
 
-  let styrka = paststaddStyrka;
-  let bedomning = 'godkänd';
-  let motivering = 'Svaret har en spårbar källa och synligt innehåll.';
-
-  if (!harSvarstext) {
-    styrka = Math.min(styrka, 20);
-    bedomning = 'avvisad';
-    motivering = 'Inget svarsinnehåll att granska i nyttolasten.';
-  } else if (!harSparbarKalla) {
-    styrka = Math.max(0, Math.round(styrka * 0.6));
-    bedomning = 'nedjusterad';
-    motivering = 'Svaret saknar en spårbar källhändelse (orsak), sänker säkerheten.';
-  } else if (paststaddStyrka > 85) {
-    // Rösten påstår nästan total säkerhet. Granskaren är mer återhållsam av princip.
-    styrka = 85;
-    bedomning = 'nedjusterad';
-    motivering = 'Påstådd säkerhet var ovanligt hög, jämnad ut till ett rimligare tak.';
-  }
-
-  return { styrka, bedomning, motivering };
+function byggSammanfattning(poster, kanal) {
+  if (!poster.length) return `Inget sagt i #${kanal} än.`;
+  const deltagare = [...new Set(poster.map(p => p.from))];
+  const senaste = poster[poster.length - 1];
+  const utdrag = poster.slice(-3).map(p => `${p.from}: ${String(p.text).slice(0, 80)}`).join(' | ');
+  return `${poster.length} inlägg i #${kanal} av ${deltagare.length} (${deltagare.slice(0, 5).join(', ')}). Senast: ${utdrag}`;
 }
 
 module.exports = {
   async handle(req, res, { path, dataDir }) {
-    if (req.method === 'GET' && path === '/granskningar') {
+    if (req.method === 'GET' && path === '/sammanfattningar') {
       const historik = lasHistorik({ dataDir });
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(historik.slice().reverse()));
@@ -70,26 +53,25 @@ module.exports = {
   },
 
   onEvent(e, ctx) {
-    if (e.kvarter === ctx.team) return; // granska inte oss själva
-    if (e.typ !== 'svar.klart' && e.typ !== 'svar.utkast') return;
+    if (e.kvarter === ctx.team) return;      // reagera inte på oss själva
+    if (e.typ !== 'fraga.ny') return;        // vänta på Örats fråga.ny
 
-    const { styrka, bedomning, motivering } = granska(e);
+    const nyttolast = e.nyttolast || {};
+    const fraga = nyttolast.fråga || nyttolast.fraga || '';
+    if (!/sammanfatta/i.test(fraga)) return; // inte en sammanfattningsförfrågan
+
+    const kanal = hittaKanal(fraga, nyttolast.kanal);
+    const poster = ctx.board.query({ channel: kanal, limit: 50 });
+    const sammanfattning = byggSammanfattning(poster, kanal);
 
     const historik = lasHistorik(ctx);
-    historik.push({
-      id: e.id,
-      ts: e.ts,
-      kvarter: e.kvarter,
-      bedomning,
-      styrka,
-      motivering,
-    });
+    historik.push({ id: e.id, ts: e.ts, kanal, sammanfattning, antalInlägg: poster.length });
     sparaHistorik(ctx, historik);
 
-    ctx.board.emit('svar.granskat', {
-      styrka,
+    ctx.board.emit('sammanfattning.klar', {
+      styrka: Math.min(100, poster.length * 5),
       orsak: e.id,
-      nyttolast: { bedomning, motivering, kvarter: e.kvarter },
+      nyttolast: { kanal, sammanfattning, antalInlägg: poster.length },
     });
   },
 };
