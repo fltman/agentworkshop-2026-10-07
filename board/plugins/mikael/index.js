@@ -2,7 +2,8 @@
 //
 // Flödet en fråga går igenom hos oss:
 //   1. Örat (ett annat kvarter) hör "@kollegan ..." och skickar fråga.ny.
-//   2. Vi väntar en kort stund på minne.träff/kunskap.ny från Minnet (samma orsak), för underlag.
+//   2. Vi väntar en kort stund på minne.träff/kunskap.ny (Minnet) och sammanfattning.klar (Mötet),
+//      samma orsak, för underlag.
 //   3. Vi formulerar ett svarsutkast och skickar svar.utkast (orsak = fråga.ny).
 //   4. Granskaren (ett annat kvarter) granskar och skickar svar.granskat (orsak = vårt svar.utkast).
 //   5. Vi postar det slutgiltiga svaret på Torget och skickar svar.klart (orsak = svar.granskat).
@@ -50,7 +51,7 @@ module.exports = {
       return;
     }
 
-    if (e.typ === 'minne.träff' || e.typ === 'kunskap.ny') {
+    if (e.typ === 'minne.träff' || e.typ === 'kunskap.ny' || e.typ === 'sammanfattning.klar') {
       const frågaId = hittaFråga(e.orsak);
       if (frågaId) {
         const text = plockaText(e.nyttolast);
