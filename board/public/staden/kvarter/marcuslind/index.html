@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>Mötet</title>
+<style>
+  html,body{margin:0;min-height:320px;background:#0b0d10;color:#e6e8eb;font:14px/1.4 ui-monospace,Menlo,monospace}
+  .wrap{padding:14px 16px}
+  h1{color:#ffb454;font-size:18px;margin:0 0 4px;letter-spacing:.08em}
+  .sub{color:#8b949e;margin:0 0 12px}
+  ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+  li{border-left:3px solid #5fd7a7;padding:6px 10px;background:#11151a;border-radius:4px}
+  .rad1{display:flex;justify-content:space-between;color:#c9d1d9}
+  .kanal{color:#5fd7a7}
+  .antal{color:#8b949e}
+  .text{color:#c9d1d9;margin-top:2px}
+  .tomt{color:#8b949e}
+</style></head>
+<body><div class="wrap">
+  <h1>MÖTET</h1>
+  <p class="sub">sammanfattar en kanal när @kollegan blir ombedd</p>
+  <ul id="lista"><li class="tomt">inga sammanfattningar ännu</li></ul>
+</div>
+<script>
+const visa = () => fetch('/t/marcuslind/sammanfattningar').then(r => r.json()).then(poster => {
+  const el = document.getElementById('lista');
+  if (!poster.length) { el.innerHTML = '<li class="tomt">inga sammanfattningar ännu</li>'; return; }
+  el.innerHTML = poster.slice(0, 10).map(p => `
+    <li>
+      <div class="rad1"><span class="kanal">#${p.kanal}</span><span class="antal">${p.antalInlägg} inlägg</span></div>
+      <div class="text">${p.sammanfattning}</div>
+    </li>`).join('');
+}).catch(() => {});
+visa(); setInterval(visa, 8000);
+</script></body></html>
