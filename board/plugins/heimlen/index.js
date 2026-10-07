@@ -121,7 +121,7 @@ module.exports = {
         ],
         records: periodRecords.map((r) => ({
           question_id: r.fraga_id || null,
-          received_at: r.ts,
+          received_at: r.fraga_ts || r.ts,
           answered_at: null,
           cancelled_at: null,
           audience: 'unknown',
@@ -238,6 +238,7 @@ module.exports = {
     const förfäderTillE = förfäder(e, index);
     const rotFråga = förfäderTillE.find((h) => h.typ === 'fråga.ny') || (e.nyttolast && e.nyttolast.fråga_id ? index.get(e.nyttolast.fråga_id) : null);
     const fragaId = rotFråga ? rotFråga.id : ((e.nyttolast && e.nyttolast.fråga_id) || e.orsak || null);
+    const fragaTs = rotFråga && rotFråga.ts ? rotFråga.ts : null;
 
     const grundStyrka = e.styrka ?? 50;
     let styrka;
@@ -261,7 +262,7 @@ module.exports = {
 
     ctx.granskade.add(e.id);
     ctx.historik.push({
-      handelse: e.id, fraga_id: fragaId, ts: Date.now(), från: e.kvarter, godkänt, styrka, skäl, källor,
+      handelse: e.id, fraga_id: fragaId, fraga_ts: fragaTs, ts: Date.now(), från: e.kvarter, godkänt, styrka, skäl, källor,
       svar: typeof svar === 'string' ? svar.slice(0, 200) : null,
     });
     sparaHistorik(ctx.dataDir, ctx.historik);
