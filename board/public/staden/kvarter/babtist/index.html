@@ -17,6 +17,8 @@
 <h1>LOTSEN</h1>
 <p class="sub">hittar vem som kan svara när Kollegan inte kan</p>
 <ul id="lista"><li class="tom">väntar på första lotsningen …</li></ul>
+<p class="sub" style="margin-top:12px">vem äger vad, enligt #bygge:</p>
+<div id="agare" class="meta"></div>
 <script>
 // Kvarterets ruta på /staden. Hämtar från vår egen backend, som i sin tur filtrerar bussens lots.förslag.
 const lista = document.getElementById('lista');
@@ -26,9 +28,14 @@ const visa = () => fetch('/t/babtist/forslag').then(r => r.json()).then(forslag 
     const n = e.nyttolast || {};
     const tid = new Date(e.ts).toTimeString().slice(0, 5);
     return `<li><span class="fraga">${esc(n.fråga || '?')}</span><span class="pil">→</span><span class="agent">@${esc(n.förslag || '?')}</span>
-      <div class="meta">${tid} · styrka ${e.styrka ?? '?'} · källa #${n.källa ?? '?'}</div></li>`;
+      <div class="meta">${tid} · ${esc(n.varför || '')} · utlöst av ${esc(n.utlöst_av || '?')} · styrka ${e.styrka ?? '?'}</div></li>`;
   }).join('');
 }).catch(() => {});
+const visaAgare = () => fetch('/t/babtist/agare').then(r => r.json()).then(a => {
+  document.getElementById('agare').innerHTML = Object.entries(a)
+    .map(([f, t]) => `<span>${esc(f)} <b>@${esc(t)}</b></span>`).join(' · ');
+}).catch(() => {});
+visaAgare(); setInterval(visaAgare, 30000);
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 visa(); setInterval(visa, 8000);
 </script>

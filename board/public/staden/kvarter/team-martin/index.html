@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pulsen — team-martin</title>
+<style>
+  :root { --bg:#0b0d10; --panel:#12151a; --line:#1f242c; --fg:#e6e8eb; --dim:#7d8590; --accent:#ffb454; --hot:#ff6b6b; --cool:#5ec8d8; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.45 ui-monospace, Menlo, monospace; padding:12px; }
+  .topp { display:flex; align-items:baseline; gap:10px; margin-bottom:8px; }
+  .tal { font-size:40px; font-weight:700; line-height:1; color:var(--accent); font-variant-numeric:tabular-nums; transition:color .4s; }
+  .ord { font-size:15px; letter-spacing:.06em; text-transform:uppercase; }
+  .sub { margin-left:auto; color:var(--dim); font-size:11px; text-align:right; }
+  canvas { width:100%; height:84px; display:block; border:1px solid var(--line); border-radius:8px; background:#0e1116; }
+  h2 { font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin:12px 0 5px; font-weight:600; }
+  .rad { display:flex; align-items:center; gap:8px; padding:2px 0; }
+  .namn { width:118px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--dim); flex:none; }
+  .bar { flex:1; height:7px; background:#1b2027; border-radius:4px; overflow:hidden; }
+  .bar i { display:block; height:100%; background:var(--accent); border-radius:4px; transition:width .5s; }
+  .n { width:34px; text-align:right; color:var(--dim); font-variant-numeric:tabular-nums; flex:none; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { padding:3px 0; border-bottom:1px solid #161a20; color:var(--dim); }
+  li:last-child { border-bottom:0; }
+  li b { color:var(--fg); font-weight:600; }
+  .pil { color:var(--cool); }
+  .vanta { color:var(--hot); }
+  .tom { color:#49505a; font-style:italic; }
+  .flex { display:flex; gap:14px; align-items:flex-start; }
+  .flex > div { flex:1; min-width:0; }
+</style>
+</head>
+<body>
+<div class="topp">
+  <span class="tal" id="tal">–</span>
+  <span class="ord" id="ord">väntar</span>
+  <span class="sub" id="sub"></span>
+</div>
+<canvas id="kurva" width="800" height="168"></canvas>
+
+<div class="flex">
+  <div>
+    <h2>hetaste kanaler</h2>
+    <div id="kanaler"><div class="tom">tyst</div></div>
+  </div>
+  <div>
+    <h2>väntar på svar</h2>
+    <ul id="kö"><li class="tom">inget i kö</li></ul>
+  </div>
+</div>
+
+<h2>pulsen svarade örat</h2>
+<ul id="reaktioner"><li class="tom">ingen fråga har hörts än</li></ul>
+
+<h2>hört från andra kvarter</h2>
+<ul id="främmande"><li class="tom">bussen är tyst</li></ul>
+
+<script>
+const API = '/t/team-martin/puls';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+const klockan = (ts) => new Date(ts).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+
+function farg(s) { return s >= 70 ? '#ff6b6b' : s >= 40 ? '#ffb454' : '#5ec8d8'; }
+
+function ritaKurva(historik, styrka) {
+  const c = $('kurva'), g = c.getContext('2d');
+  const W = c.width, H = c.height;
+  g.clearRect(0, 0, W, H);
+
+  g.strokeStyle = '#1b2027'; g.lineWidth = 1;
+  for (const v of [25, 50, 75]) {
+    const y = H - (v / 100) * (H - 12) - 6;
+    g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+  }
+
+  const pts = (historik || []).slice(-90);
+  if (pts.length < 2) {
+    g.fillStyle = '#49505a'; g.font = '16px ui-monospace, monospace';
+    g.fillText('samlar puls…', 12, H / 2);
+    return;
+  }
+  const steg = W / (pts.length - 1);
+  const y = (v) => H - (Math.max(0, Math.min(100, v)) / 100) * (H - 12) - 6;
+
+  g.beginPath();
+  g.moveTo(0, H);
+  pts.forEach((p, i) => g.lineTo(i * steg, y(p.styrka)));
+  g.lineTo(W, H); g.closePath();
+  const grad = g.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, farg(styrka) + '55'); grad.addColorStop(1, 'transparent');
+  g.fillStyle = grad; g.fill();
+
+  g.beginPath();
+  pts.forEach((p, i) => (i ? g.lineTo(i * steg, y(p.styrka)) : g.moveTo(0, y(p.styrka))));
+  g.strokeStyle = farg(styrka); g.lineWidth = 2.5; g.lineJoin = 'round'; g.stroke();
+
+  const sista = pts[pts.length - 1];
+  g.beginPath(); g.arc(W - 2, y(sista.styrka), 4, 0, Math.PI * 2);
+  g.fillStyle = farg(styrka); g.fill();
+
+  // En prick där vi faktiskt skickade puls.tempo på bussen.
+  pts.forEach((p, i) => {
+    if (!p.skickad) return;
+    g.beginPath(); g.arc(i * steg, y(p.styrka), 2.5, 0, Math.PI * 2);
+    g.fillStyle = '#e6e8eb'; g.fill();
+  });
+}
+
+function rita(d) {
+  const n = d.nu || {};
+  $('tal').textContent = n.styrka == null ? '–' : n.styrka;
+  $('tal').style.color = farg(n.styrka || 0);
+  $('ord').textContent = n.ord || '';
+  $('ord').style.color = farg(n.styrka || 0);
+
+  const ton = d.stämning && d.stämning.nyttolast
+    ? ' · ton: ' + esc(d.stämning.nyttolast.ton || d.stämning.nyttolast.stämning || d.stämning.styrka)
+    : '';
+  $('sub').innerHTML = esc(n.mpm) + ' inlägg/min · ' + esc(n.inlägg) + ' på ' + esc(n.fönster_min) + ' min<br>'
+    + 'tempo ' + esc(n.tempo) + ' · tryck ' + esc(n.tryck) + ton;
+
+  ritaKurva(d.historik, n.styrka || 0);
+
+  const k = d.kanaler || [];
+  $('kanaler').innerHTML = k.length ? k.map((x) =>
+    '<div class="rad"><span class="namn">#' + esc(x.kanal) + '</span>'
+    + '<span class="bar"><i style="width:' + Math.max(3, x.styrka) + '%;background:' + farg(x.styrka) + '"></i></span>'
+    + '<span class="n">' + esc(x.inlägg) + '</span></div>').join('') : '<div class="tom">tyst</div>';
+
+  const kö = d.obesvarade || [];
+  $('kö').innerHTML = kö.length ? kö.map((f) =>
+    '<li><span class="vanta">' + esc(f.vantat_s) + 's</span> <b>#' + esc(f.kanal) + '</b> ' + esc(f.text.slice(0, 60)) + '</li>').join('')
+    : '<li class="tom">inget i kö</li>';
+
+  const r = d.reaktioner || [];
+  $('reaktioner').innerHTML = r.length ? r.map((x) =>
+    '<li>' + klockan(x.ts) + ' <span class="pil">↩' + esc(x.orsak) + '</span> ' + esc(x.från)
+    + ' → puls.tryck <b>' + esc(x.styrka) + '</b> (' + esc(x.ord) + ', ' + esc(x.köar) + ' i kö)</li>').join('')
+    : '<li class="tom">ingen fråga har hörts än</li>';
+
+  const f = d.främmande || [];
+  $('främmande').innerHTML = f.length ? f.map((x) =>
+    '<li>' + klockan(x.ts) + ' <b>' + esc(x.kvarter) + '</b> ' + esc(x.typ)
+    + (x.styrka == null ? '' : ' (' + esc(x.styrka) + ')') + '</li>').join('')
+    : '<li class="tom">bussen är tyst</li>';
+}
+
+async function hamta() {
+  try {
+    const r = await fetch(API, { cache: 'no-store' });
+    if (r.ok) rita(await r.json());
+  } catch (e) { /* tavlan kan vara nere en stund, rutan står kvar */ }
+}
+hamta();
+setInterval(hamta, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>Nyfikenheten</title>
+<style>
+  html,body{margin:0;min-height:320px;background:#0b0d10;color:#e6e8eb;font:14px/1.45 ui-monospace,Menlo,monospace}
+  body{padding:14px 16px;box-sizing:border-box}
+  h1{color:#c792ea;font-size:18px;margin:0 0 2px;letter-spacing:.12em}
+  .sub{color:#8b949e;margin:0 0 12px;font-size:12px}
+  .nu{border-left:3px solid #c792ea;padding:6px 10px;margin:0 0 6px;font-size:16px;color:#fff}
+  .varfor{color:#8b949e;font-size:12px;margin:0 0 6px}
+  .svar{color:#5fd7a7;font-size:13px;margin:0 0 12px}
+  .tom{color:#8b949e;font-style:italic}
+  ul{list-style:none;padding:0;margin:8px 0 0}
+  li{padding:4px 0;border-top:1px solid #1d2229;color:#b9c0c8;font-size:12px}
+  li b{color:#ffb454;font-weight:normal}
+  .rad{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px}
+  button{background:#2a1f3d;color:#e6e8eb;border:1px solid #c792ea;border-radius:4px;padding:5px 10px;font:inherit;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  .klocka{color:#8b949e;font-size:12px}
+</style></head>
+<body>
+<h1>? NYFIKENHETEN</h1>
+<p class="sub">Kollegan undrar själv, väckt av vad de andra förmågorna ser</p>
+<div id="nu" class="nu tom">Väntar på något att undra över…</div>
+<div id="varfor" class="varfor"></div>
+<div id="svar" class="svar"></div>
+<div class="rad"><span id="klocka" class="klocka"></span><button id="vack">Väck nyfikenheten</button></div>
+<ul id="hist"></ul>
+<script>
+const $ = id => document.getElementById(id);
+const tid = ts => new Date(ts).toTimeString().slice(0, 5);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+async function visa() {
+  try {
+    const s = await fetch('/t/farzad/state', { cache: 'no-store' }).then(r => r.json());
+    if (s.nu) {
+      $('nu').className = 'nu';
+      $('nu').textContent = s.nu['fråga'];
+      $('varfor').innerHTML = `${tid(s.nu.ts)} · väckt av <b>${esc(s.nu.kvarter)}</b> (${esc(s.nu.typ)}, händelse ${esc(s.nu.orsak)})${s.nu.knapp ? ' · en människa tryckte' : ''}`;
+      $('svar').textContent = s.nu.svar ? `↳ ${s.nu.svar['från']}: ${s.nu.svar.text}` : '↳ väntar på svar…';
+    }
+    const kvar = Math.max(0, Math.round((s['nästaFråga'] - Date.now()) / 1000));
+    $('klocka').textContent = `${s.kandidater} signaler i kö · ${s.kvarter.length} kvarter hörda · ` + (kvar ? `nästa om ${Math.floor(kvar / 60)}:${String(kvar % 60).padStart(2, '0')}` : 'redo');
+    $('hist').innerHTML = s.historik.slice(1).map(h =>
+      `<li>${tid(h.ts)} <b>${esc(h.kvarter)}</b> → ${esc(h['fråga'])}${h.svar ? ' ✓' : ''}</li>`).join('');
+  } catch {}
+}
+
+$('vack').onclick = async () => {
+  $('vack').disabled = true;
+  try {
+    const r = await fetch('/t/farzad/vack', { method: 'POST' }).then(r => r.json());
+    if (r.error) $('klocka').textContent = r.error;
+  } catch {}
+  setTimeout(() => { $('vack').disabled = false; visa(); }, 1500);
+};
+
+visa(); setInterval(visa, 5000);
+</script></body></html>

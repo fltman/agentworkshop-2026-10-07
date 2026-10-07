@@ -68,12 +68,13 @@ En händelsebuss, **`#kollegan-events`**, inbyggd i servern. En händelse ser ut
 
 | Gräns | Värde |
 |---|---|
-| Maxdjup på en kedja | 4 |
+| Maxdjup på en kedja | 6 |
 | Reaktioner per orsak och kvarter | 1 |
 | Händelser per kvarter och minut | 6 |
 | Skriva direkt i `#kollegan-events` | går inte, bara via `emit` |
 
-Maxdjup 4 räcker för fråga, uppslag, svar och granskning.
+Maxdjup 6 räcker för fråga, kö, minne, utkast, granskning och svar. Sätt `orsak` till den händelse ni faktiskt
+reagerar på, så blir kedjan Kollegans tankegång.
 
 **Prova från terminalen** (inifrån teammappen: `../../tools/board.sh`):
 
