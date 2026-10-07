@@ -56,7 +56,7 @@ test('real server: Pulse → Mood → HTTP status and static tile', async t => {
   }
   assert.equal((await (await get('/api/health')).json()).ok, true);
   for (let i = 0; i < 20; i++) {
-    await post('/api/messages', { from: 'workshop-test', channel: 'bygge', text: 'Why? does not work. Thank you.' });
+    await post('/api/messages', { from: 'workshop-test', channel: 'bygge', text: 'Why? does not work. Thank you. ❤️' });
   }
   const pulse = await post('/api/events', {
     from: 'team-martin', typ: 'puls.tempo', styrka: 42,
@@ -74,13 +74,19 @@ test('real server: Pulse → Mood → HTTP status and static tile', async t => {
   assert.equal(mood.kvarter, 'tomhol');
   assert.equal(mood.djup, 2);
   assert.equal(mood.styrka, null);
-  assert.deepEqual(mood.nyttolast.signaler, { fragor: 20, hinder: 20, uppskattning: 20 });
+  assert.deepEqual(mood.nyttolast.signaler, { fragor: 20, hinder: 20, uppskattning: 20, omtanke: 20 });
   const status = await (await get('/t/tomhol/status')).json();
   assert.equal(status.fel, null);
   assert.equal(status.kanaler[0].utlosare.id, pulse.id);
   assert.equal(status.kanaler[0].utskick, 'skickat');
+  const timeline = await (await get('/t/tomhol/timeline')).json();
+  assert.equal(timeline.kanaler[0].kanal, 'bygge');
+  assert.equal(timeline.kanaler[0].intervall.reduce((total, b) => total + b.antal, 0), 20);
+  assert.equal(timeline.kanaler[0].markorer.filter(m => m.signal === 'omtanke').length, 20);
+  assert.ok(timeline.tackningFran <= timeline.till);
   assert.match(await (await get('/staden/kvarter/tomhol/index.html')).text(), /Stämningen/);
   assert.match(await (await get('/staden/kvarter/tomhol/app.js')).text(), /textContent/);
+  assert.match(await (await get('/staden/kvarter/tomhol/timeline.js')).text(), /prefers-reduced-motion/);
 });
 
 test('tile renders source text safely and surfaces fetch failures', async () => {
@@ -106,7 +112,7 @@ test('tile renders source text safely and surfaces fetch failures', async () => 
           fel: null,
           kanaler: [{
             kanal: 'bygge', status: 'språksignaler observerade',
-            signaler: { fragor: 1, hinder: 0, uppskattning: 0 },
+            signaler: { fragor: 1, hinder: 0, uppskattning: 0, omtanke: 2 },
             antalInlagg: 1, fonster: { fran: new Date(0), till: new Date() },
             uppdaterad: Date.now(), utlosare: { typ: 'puls.tempo', id: 123, djup: 1 },
             utskick: 'skickat', aktivitet: { styrka: 10, nyttolast: { ord: 'lugnt', fönster_min: 5 } },
@@ -122,6 +128,8 @@ test('tile renders source text safely and surfaces fetch failures', async () => 
   await new Promise(resolve => setImmediate(resolve));
   const article = elements.channels.children[0];
   assert.ok(article.children.some(e => e.textContent.includes(source)));
+  assert.ok(article.children.some(e => e.textContent.includes('❤️ Uttryckt omtanke: 2')));
+  assert.ok(article.children.some(e => e.textContent.includes('❓ Frågor: 1')));
   assert.equal(article.children.some(e => 'innerHTML' in e), false);
   fail = true;
   await scheduled();

@@ -43,7 +43,7 @@ test('Swedish/English signals, overlapping categories, negations and sources', (
   s.message('unblocked thankfully');
   s.event();
   const payload = s.sent[0].nyttolast;
-  assert.deepEqual(payload.signaler, { fragor: 2, hinder: 3, uppskattning: 2 });
+  assert.deepEqual(payload.signaler, { fragor: 2, hinder: 3, uppskattning: 2, omtanke: 0 });
   assert.equal(payload.antalInlagg, 5);
   assert.equal(payload.kallor.filter(k => k.inlagg === 1 && k.signal === 'uppskattning').length, 1);
   assert.equal(payload.kallor.some(k => k.inlagg === 3 && k.signal === 'hinder'), false);
@@ -61,16 +61,37 @@ test('latest 20 messages, stale/future and other channels excluded', () => {
   for (let i = 0; i < 25; i++) s.message('Thanks');
   s.event();
   assert.equal(s.sent[0].nyttolast.antalInlagg, 20);
-  assert.deepEqual(s.sent[0].nyttolast.signaler, { fragor: 0, hinder: 0, uppskattning: 20 });
+  assert.deepEqual(s.sent[0].nyttolast.signaler, { fragor: 0, hinder: 0, uppskattning: 20, omtanke: 0 });
 });
 
 test('maximum sample fits the actual bus message length limit', () => {
   const s = setup();
-  for (let i = 0; i < 20; i++) s.message('Why? does not work. Thank you.');
+  for (let i = 0; i < 20; i++) s.message('Why? does not work. Thank you. Ta den tid du behöver.');
   s.event();
   assert.equal(s.sent[0].nyttolast.kallor.length, 6);
-  assert.deepEqual(s.sent[0].nyttolast.signaler, { fragor: 20, hinder: 20, uppskattning: 20 });
+  assert.deepEqual(s.sent[0].nyttolast.signaler, { fragor: 20, hinder: 20, uppskattning: 20, omtanke: 20 });
   assert.ok(JSON.stringify({ ...s.sent[0], styrka: null }).length <= 2000);
+});
+
+test('expressed care: Swedish/English support phrases and hearts, once per message', () => {
+  const s = setup();
+  s.message('Hoppas det löser sig! Ta den tid du behöver. ❤️ ❤️');
+  s.message('Jag finns här. Vi finns här.');
+  s.message("Hope it works out. Take your time. I'm here for you.");
+  s.message('I am here for you. We are here for you.');
+  s.message('❤ ♥️');
+  s.message('Vanlig text utan omtankeuttryck.');
+  s.event();
+  assert.equal(s.sent[0].nyttolast.signaler.omtanke, 5);
+  assert.ok(s.sent[0].nyttolast.kallor.some(k => k.signal === 'omtanke'));
+});
+
+test('negated care and unrelated emoji are not positive care signals', () => {
+  const s = setup();
+  s.message('Inte jag finns här. Not here for you. Do not take your time.');
+  s.message('Vi bygger nu. 😀 🚧 ❓ 🙌 heartless');
+  s.event();
+  assert.equal(s.sent[0].nyttolast.signaler.omtanke, 0);
 });
 
 test('no evidence is not calm; no rule matches are reported explicitly', () => {

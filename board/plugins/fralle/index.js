@@ -18,7 +18,14 @@ const MAX_PER_REQUESTER = 10;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 60000;
 const LEASE_TIME = 120000;
+const STALL_TIME = 300000;
 const STAGES = ['väntar', 'påbörjad', 'väntar på granskning', 'granskat'];
+const NEXT_STEPS = {
+  väntar: 'Inget påbörjat arbete har observerats.',
+  påbörjad: 'Väntar på ett svarsutkast eller ett färdigt svar.',
+  'väntar på granskning': 'Ingen granskning eller färdigställning har observerats efter utkastet.',
+  granskat: 'Granskning har observerats, men inget färdigt svar har kopplats till frågan.',
+};
 const LIFECYCLE = ['minne.träff', 'sammanfattning.klar', 'svar.utkast', 'svar.granskat', 'svar.klart'];
 const emptyState = () => ({ version: 3, questions: [], processed: [], errors: [], turn: 0, served: [], lastClaim: null });
 let state = emptyState();
@@ -61,29 +68,66 @@ function trimTerminal() {
   state.questions = [...state.questions.filter(item => item.status === 'väntar'), ...answered, ...cancelled];
 }
 
+function eventInfo(event) {
+  return {
+    id: Number.isSafeInteger(event.id) ? event.id : null, typ: event.typ,
+    ts: Number.isFinite(event.ts) ? event.ts : null, kvarter: event.kvarter || null,
+  };
+}
+
+function turnExplanation(earlier, later, served) {
+  const first = served.get(earlier.key) || 0;
+  const second = served.get(later.key) || 0;
+  const reason = first === second
+    ? 'den äldsta väntande frågan kom först; händelse-id bryter lika tidsstämplar'
+    : first === 0 ? 'den första frågaren ännu inte fått en registrerad tur'
+      : 'den första frågaren fick sin senaste registrerade tur tidigare';
+  return `${earlier.name} går före ${later.name} eftersom ${reason}.`;
+}
+
 function queue(now = Date.now()) {
   const served = new Map(state.served.map(item => [item.key, item.turn]));
   const groups = new Map();
   for (const item of state.questions.filter(question => question.status === 'väntar')) {
     const key = requesterKey(item.frågare);
-    if (!groups.has(key)) groups.set(key, { key, questions: [], ts: item.ts, id: item.id });
+    if (!groups.has(key)) groups.set(key, { key, name: item.frågare, questions: [], ts: item.ts, id: item.id });
     const group = groups.get(key);
     if (item.ts < group.ts || (item.ts === group.ts && item.id < group.id)) {
       group.ts = item.ts;
       group.id = item.id;
     }
+    const progress = item.framsteg || (item.steg === 'väntar'
+      ? { id: item.id, typ: 'fråga.ny', ts: item.ts, kvarter: null } : null);
+    const elapsed = Number.isFinite(progress?.ts) ? Math.max(0, now - progress.ts) : null;
     group.questions.push({
       ...item, prioritet: Math.min(99, item.basprioritet + Math.floor(Math.max(0, now - item.ts) / 60000) * 2),
       väntetid_sek: Math.floor(Math.max(0, now - item.ts) / 1000),
+      framsteg: progress, senaste_observation: item.senaste_observation || progress,
+      utan_framsteg_sek: elapsed === null ? null : Math.floor(elapsed / 1000),
+      uppmärksamhet: elapsed !== null && elapsed >= STALL_TIME, nästa_steg: NEXT_STEPS[item.steg],
     });
   }
   const ordered = [...groups.values()].sort((a, b) =>
     (served.get(a.key) || 0) - (served.get(b.key) || 0) || a.ts - b.ts || a.id - b.id);
   for (const group of ordered) group.questions.sort((a, b) => b.prioritet - a.prioritet || a.ts - b.ts || a.id - b.id);
   const result = [];
+  const reserved = state.questions.some(item => item.status === 'väntar' && item.reservation);
   for (let round = 0; ordered.some(group => group.questions.length > round); round++) {
-    for (const group of ordered) {
-      if (group.questions[round]) result.push({ ...group.questions[round], köplats: result.length + 1 });
+    const participants = ordered.filter(group => group.questions.length > round);
+    for (const [index, group] of participants.entries()) {
+      const item = group.questions[round];
+      const comparison = index > 0 ? turnExplanation(participants[index - 1], group, served)
+        : participants.length > 1 ? turnExplanation(group, participants[1], served)
+          : 'Ingen annan frågare har fler frågor i detta varv.';
+      const reservation = item.reservation ? ' Frågan är redan reserverad; köplatsen visar beräknad turordning.'
+        : reserved ? ' Ny tilldelning väntar på den aktiva reservationen.' : '';
+      const agePoints = Math.floor(Math.max(0, now - item.ts) / 60000) * 2;
+      result.push({
+        ...item, köplats: result.length + 1, varv: round + 1,
+        turförklaring: `Varv ${round + 1}: högst en fråga per frågare och varv. ${comparison}${reservation}`,
+        prioritetsförklaring: `Prioritet ${item.prioritet}: bas ${item.basprioritet} + ${agePoints} väntetidspoäng, högst 99. ` +
+          `Fråga ${round + 1} av ${group.questions.length} inom ${group.name}s egen kö; prioritet, sedan ålder och händelse-id avgör.`,
+      });
     }
   }
   return result;
@@ -214,6 +258,12 @@ function accept(event, { board, team }) {
   if (LIFECYCLE.includes(event.typ)) {
     const item = relatedQuestion(event, board);
     if (!item) return;
+    const observation = eventInfo(event);
+    const previous = item.senaste_observation;
+    if (!previous || observation.ts > previous.ts ||
+      (observation.ts === previous.ts && (observation.id || 0) > (previous.id || 0))) {
+      item.senaste_observation = observation;
+    }
     if (event.typ === 'svar.klart') {
       item.status = 'besvarad';
       item.steg = 'besvarad';
@@ -224,10 +274,14 @@ function accept(event, { board, team }) {
       trimTerminal();
       if (!item.tur_tagen) markTurn(item);
       item.tur_tagen = true;
+      item.framsteg = observation;
     } else {
       const stage = event.typ === 'svar.granskat' ? 'granskat'
         : event.typ === 'svar.utkast' ? 'väntar på granskning' : 'påbörjad';
-      if (STAGES.indexOf(stage) > STAGES.indexOf(item.steg)) item.steg = stage;
+      if (STAGES.indexOf(stage) > STAGES.indexOf(item.steg)) {
+        item.steg = stage;
+        item.framsteg = observation;
+      }
       item.senaste_händelse = event.id;
     }
     save();
@@ -249,6 +303,7 @@ function accept(event, { board, team }) {
     inlägg: Number.isSafeInteger(payload.inlägg) && payload.inlägg > 0 ? payload.inlägg : null,
     kanal: typeof payload.kanal === 'string' ? payload.kanal.slice(0, 30) : null,
     basprioritet: urgent ? 80 : 50, status: 'väntar', steg: 'väntar',
+    framsteg: eventInfo(event), senaste_observation: eventInfo(event),
     utskick: { försök: 0, nästa_försök: null, fel: null },
     mottagare: recipients(payload, board, team),
     motivering: urgent ? 'Frågan innehåller en uttrycklig brådske- eller blockeringssignal.' : 'Normal prioritet; äldre frågor får högre prioritet med tiden.',
@@ -306,7 +361,12 @@ async function claim(req, res, context) {
   }
   const item = state.questions.find(question => question.id === selected.id);
   item.reservation = { team: body.team, till: Date.now() + LEASE_TIME };
-  if (item.steg === 'väntar') item.steg = 'påbörjad';
+  const observation = { id: null, typ: 'reservation', ts: Date.now(), kvarter: body.team };
+  if (item.steg === 'väntar') {
+    item.steg = 'påbörjad';
+    item.framsteg = observation;
+  }
+  item.senaste_observation = observation;
   markTurn(item);
   item.tur_tagen = true;
   state.lastClaim = Date.now();
@@ -360,6 +420,14 @@ module.exports = {
           (!item.reservation || (typeof item.reservation.team === 'string' && Number.isFinite(item.reservation.till))))) {
           throw new Error('Ogiltig behandlingsstatus i Köns sparade tillstånd.');
         }
+        if (!state.questions.every(item => ['framsteg', 'senaste_observation'].every(field =>
+          item[field] === undefined || (item[field] &&
+            (item[field].id === null || Number.isSafeInteger(item[field].id)) &&
+            typeof item[field].typ === 'string' &&
+            (item[field].ts === null || Number.isFinite(item[field].ts)) &&
+            (item[field].kvarter === null || typeof item[field].kvarter === 'string'))))) {
+          throw new Error('Ogiltig framstegshistorik i Köns sparade tillstånd.');
+        }
       }
       for (const event of board.events(500)) {
         if (event.kvarter === team && event.typ === 'fråga.prioriterad') {
@@ -409,6 +477,8 @@ module.exports = {
         äldsta_väntetid_sek: Math.max(0, ...active.map(item => item.väntetid_sek)),
         frågare: new Set(active.map(item => requesterKey(item.frågare))).size,
         senaste_reservation: state.lastClaim,
+        utan_framsteg: active.filter(item => item.uppmärksamhet).length,
+        utan_framsteg_gräns_sek: STALL_TIME / 1000,
       },
       fel: state.errors,
     });

@@ -13,14 +13,20 @@
   .text{color:#c9d1d9;margin-top:2px}
   .tomt{color:#8b949e}
   .portratt{width:100%;max-width:220px;border-radius:6px;display:block;margin:0 auto 10px}
+  h2{color:#ffb454;font-size:13px;margin:14px 0 6px;letter-spacing:.06em}
+  .not li{border-left-color:#7aa2f7}
+  .fran{color:#7aa2f7}
 </style></head>
 <body><div class="wrap">
   <h1>MÖTET</h1>
   <img id="portratt" class="portratt" style="display:none">
-  <p class="sub">sammanfattar en kanal när @kollegan blir ombedd</p>
+  <p class="sub">sammanfattar en kanal, sparar och hämtar anteckningar när @kollegan blir ombedd</p>
   <ul id="lista"><li class="tomt">inga sammanfattningar ännu</li></ul>
+  <h2>ANTECKNINGAR</h2>
+  <ul id="notlista" class="not"><li class="tomt">inga anteckningar ännu</li></ul>
 </div>
 <script>
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 fetch('/t/marcuslind/portratt').then(r => r.json()).then(p => {
   if (p && p.url) { const img = document.getElementById('portratt'); img.src = p.url; img.style.display = 'block'; }
 }).catch(() => {});
@@ -29,9 +35,18 @@ const visa = () => fetch('/t/marcuslind/sammanfattningar').then(r => r.json()).t
   if (!poster.length) { el.innerHTML = '<li class="tomt">inga sammanfattningar ännu</li>'; return; }
   el.innerHTML = poster.slice(0, 10).map(p => `
     <li>
-      <div class="rad1"><span class="kanal">#${p.kanal}</span><span class="antal">${p.antalInlägg} inlägg</span></div>
-      <div class="text">${p.sammanfattning}</div>
+      <div class="rad1"><span class="kanal">#${esc(p.kanal)}</span><span class="antal">${esc(p.antalInlägg)} inlägg</span></div>
+      <div class="text">${esc(p.sammanfattning)}</div>
     </li>`).join('');
 }).catch(() => {});
-visa(); setInterval(visa, 8000);
+const visaNoteringar = () => fetch('/t/marcuslind/anteckningar').then(r => r.json()).then(noteringar => {
+  const el = document.getElementById('notlista');
+  if (!noteringar.length) { el.innerHTML = '<li class="tomt">inga anteckningar ännu</li>'; return; }
+  el.innerHTML = noteringar.slice(0, 10).map(n => `
+    <li>
+      <div class="rad1"><span class="kanal">#${esc(n.kanal)}</span><span class="fran">${esc(n.från)}</span></div>
+      <div class="text">${esc(n.text)}</div>
+    </li>`).join('');
+}).catch(() => {});
+visa(); visaNoteringar(); setInterval(() => { visa(); visaNoteringar(); }, 8000);
 </script></body></html>

@@ -6,6 +6,8 @@ h2 { font-size: 16px; margin-top: 24px; }
 p { margin: 8px 0; }
 details { border-left: 3px solid #75dfc1; background: #192632; padding: 12px; margin: 12px 0; }
 summary { cursor: pointer; }
+.stalled { border-left-color: #ffd479; }
+.warning { color: #ffd479; }
 .filters { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
 select { font: inherit; padding: 4px; max-width: 100%; }
 .meta, #connection { color: #b8cbdc; font-size: 13px; }
