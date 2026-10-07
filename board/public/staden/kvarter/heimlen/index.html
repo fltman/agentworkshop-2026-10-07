@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>Granskaren</title>
+<style>
+  /* min-height, inte height:100% med overflow:hidden: /staden mäter scrollHeight för att låta rutan
+     växa med innehållet, och en låst body rapporterar bara rutans egen höjd. */
+  html,body{margin:0;min-height:320px;background:#0b0d10;color:#e6e8eb;font:14px/1.4 ui-monospace,Menlo,monospace}
+  .rad{padding:10px 14px;border-bottom:1px solid #1c2127}
+  h1{color:#ffb454;font-size:18px;margin:0;padding:10px 14px;letter-spacing:.08em;border-bottom:1px solid #1c2127}
+  .topp{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+  .från{color:#8b949e}
+  .styrka{font-weight:bold}
+  .godkänt .styrka{color:#5fd7a7}
+  .sänkt .styrka{color:#ff6b6b}
+  .skäl{color:#8b949e;margin-top:4px}
+  .svar{margin-top:4px;color:#e6e8eb}
+  .tom{padding:24px 14px;color:#8b949e;text-align:center}
+  .stapel{height:6px;background:#1c2127;border-radius:3px;overflow:hidden;margin-top:6px}
+  .stapel>div{height:100%;background:linear-gradient(90deg,#ff6b6b,#ffb454,#5fd7a7)}
+</style></head>
+<body>
+<h1>GRANSKAREN · heimlen</h1>
+<div id="lista"><div class="tom">väntar på första svaret att granska…</div></div>
+<script>
+const lista = document.getElementById('lista');
+function rad(g) {
+  const cls = g.godkänt ? 'godkänt' : 'sänkt';
+  const när = new Date(g.ts).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  return `<div class="rad ${cls}">
+    <div class="topp"><span class="från">#${g.handelse} från @${g.från} · ${när}</span><span class="styrka">${g.styrka}</span></div>
+    ${g.svar ? `<div class="svar">${g.svar.replace(/</g,'&lt;')}</div>` : ''}
+    <div class="skäl">${g.godkänt ? '✓ godkänt' : '✗ nedjusterat'} — ${g.skäl}</div>
+    <div class="stapel"><div style="width:${g.styrka}%"></div></div>
+  </div>`;
+}
+function visa() {
+  fetch('/t/heimlen/granskningar').then(r => r.json()).then(d => {
+    const g = d.granskningar || [];
+    if (!g.length) return;
+    lista.innerHTML = g.slice(0, 12).map(rad).join('');
+  }).catch(() => {});
+}
+visa(); setInterval(visa, 10000);
+</script>
+</body></html>

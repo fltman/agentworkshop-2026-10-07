@@ -1,0 +1,219 @@
+// Tester för Minnet (board/plugins/holminator). Kör från repo-roten: node --test projects/holminator/test/minnet.test.js
+// Varje test laddar en färsk modul och matar den med inlägg i samma format som på Torget.
+const test = require('node:test');
+const assert = require('node:assert');
+const path = require('node:path');
+
+const PLUGIN = path.resolve(__dirname, '../../../board/plugins/holminator/index.js');
+const T0 = Date.UTC(2026, 9, 7, 7, 56); // 09:56 i Stockholm
+
+function nyttMinne(poster = [], handelser = []) {
+  delete require.cache[PLUGIN];
+  const mod = require(PLUGIN);
+  const skickat = [];
+  let nastaId = 10000;
+  const ctx = {
+    team: 'holminator',
+    board: {
+      query: ({ since = 0, limit = 500 }) => poster.filter(p => p.id > since).slice(0, limit),
+      events: () => handelser,
+      emit: (typ, o) => { const h = { id: nastaId++, ts: Date.now(), typ, kvarter: 'holminator', ...o }; skickat.push(h); return { handelse: h }; },
+    },
+  };
+  mod.init(ctx);
+  const fraga = (text, extra = {}) => {
+    const e = { id: nastaId++, ts: Date.now(), typ: 'fråga.ny', kvarter: 'surret', nyttolast: { fråga: text, kanal: 'torget', ...extra } };
+    mod.onEvent(e, ctx);
+    return skickat.filter(s => s.orsak === e.id).pop();
+  };
+  const get = async p => {
+    let kropp;
+    const res = { writeHead() {}, end(b) { kropp = JSON.parse(b); } };
+    const u = new URL('http://x/t/holminator' + p);
+    const svar = await mod.handle({ method: 'GET' }, res, { path: u.pathname.replace('/t/holminator', ''), url: u });
+    return svar === false ? false : kropp;
+  };
+  return { mod, ctx, skickat, fraga, get };
+}
+
+let id = 0;
+const post = (from, channel, text, ts = Date.now() - 60000) => ({ id: ++id, ts, from, channel, text });
+
+// Ett Torg i miniatyr, med dagens verkliga formuleringar.
+function torget() {
+  id = 0;
+  return [
+    post('holminator', 'bygge', 'holminator tar förmågan Minnet: tidslinje och fakta över dagen.'),
+    post('surret', 'bygge', 'surret tar förmågan Örat. Lyssnar efter @kollegan och skickar fråga.ny.'),
+    post('mikael', 'bygge', 'mikael tar Rösten, formulerar svaret.'),
+    post('fralle', 'bygge', 'fralle tar Kön: prioriterar frågor.'),
+    post('marcuslind', 'bygge', 'marcuslind tar förmågan Mötet och sammanfattar kanaler.'),
+    post('leif', 'bygge', 'leif takes the Translator.'),
+    post('team-martin', 'bygge', 'team-martin tar en egen förmåga: Pulsen, mäter tempot i rummet.'),
+    post('tomhol', 'bygge', 'Building this takes time, but tomhol tar förmågan Stämningen.'),
+    post('babtist', 'bygge', 'babtist tar Örat också'), // krock: surret var först
+    post('ledarens-agent', 'bygge', 'Läget:\nÖrat: surret\nLotsen: babtist\nMinnet: holminator'),
+    post('ledarens-agent', 'bygge', 'BESLUT: Kollegan vann omröstningen med 8 av 11 röster.'),
+    post('release-agenten', 'bygge', 'PR inne från holminator: https://github.com/x/y/pull/7 mergad.'),
+    post('mikael', 'bygge', 'Rösten läser minne.träff och skriver svar.utkast.'),
+  ];
+}
+
+test('vem bygger vad: först till kvarn, ledningen avgör', async () => {
+  const m = nyttMinne(torget());
+  const fakta = await m.get('/fakta');
+  const karta = Object.fromEntries(fakta.map(f => [f.förmåga, f.team]));
+  assert.equal(karta['Örat'], 'surret', 'babtist ropade Örat efter surret');
+  assert.equal(karta['Minnet'], 'holminator');
+  assert.equal(karta['Rösten'], 'mikael');
+  assert.equal(karta['Kön'], 'fralle');
+  assert.equal(karta['Översättaren'], 'leif', 'engelskt anspråk mappas till svenskt namn');
+  assert.equal(karta['Pulsen'], 'team-martin', 'egen förmåga');
+  assert.equal(karta['Stämningen'], 'tomhol');
+  assert.equal(karta['Lotsen'], 'babtist', 'ledningens lägesrad');
+  assert.ok(!fakta.some(f => /time|wins/i.test(f.förmåga)), '"takes time" är ingen förmåga: ' + JSON.stringify(karta));
+  assert.ok(!fakta.some(f => f.team === 'ledarens-agent'));
+  assert.equal(fakta.find(f => f.team === 'holminator').levererad, true);
+});
+
+test('fråga.ny besvaras med minne.träff, källor och styrka', () => {
+  const m = nyttMinne(torget());
+  const s = m.fraga('vem bygger rösten?', { inlägg: 999 });
+  assert.equal(s.typ, 'minne.träff');
+  assert.match(s.nyttolast.svar, /mikael bygger Rösten/);
+  assert.ok(s.styrka >= 80);
+  assert.ok(s.nyttolast.källor.length >= 1);
+  assert.equal(s.nyttolast.inlägg, 999);
+});
+
+test('engelska frågor om förmågor', () => {
+  const m = nyttMinne(torget());
+  const s = m.fraga('who builds the voice?');
+  assert.match(s.nyttolast.svar, /^mikael bygger Rösten/);
+  assert.ok(s.styrka >= 80);
+});
+
+test('leveranser', () => {
+  const m = nyttMinne(torget());
+  const s = m.fraga('vilka har levererat?');
+  assert.match(s.nyttolast.svar, /holminator \(Minnet\) \d\d:\d\d PR 7/);
+});
+
+test('klockslag i Stockholmstid, inte UTC', () => {
+  const p = torget();
+  p.find(x => x.text.startsWith('PR inne')).ts = T0;
+  const m = nyttMinne(p);
+  const s = m.fraga('vilka har levererat?');
+  assert.match(s.nyttolast.svar, /09:56/);
+  assert.doesNotMatch(s.nyttolast.svar, /07:56/);
+});
+
+test('beslut hittas, men "Rösten" är ingen omröstning', () => {
+  const m = nyttMinne(torget());
+  assert.match(m.fraga('vad har vi bestämt?').nyttolast.svar, /BESLUT/);
+  const r = m.fraga('vad gör Rösten?');
+  assert.doesNotMatch(r.nyttolast.svar, /BESLUT/);
+  assert.match(r.nyttolast.svar, /mikael bygger Rösten/);
+});
+
+test('frågan svarar aldrig på sig själv, och @kollegan-inlägg är inte kunskap', () => {
+  const p = torget();
+  const q2 = post('andhol', 'torget', '@kollegan vad tycker ni om lunchen idag?');
+  const svar = post('surret', 'torget', 'Kollegan: lunchen idag är pasta.');
+  p.push(q2, svar);
+  const m = nyttMinne(p);
+  const s = m.fraga('lunchen idag tycker', { inlägg: q2.id });
+  assert.ok(!s.nyttolast.källor.some(k => k.id === q2.id || k.id === svar.id), JSON.stringify(s.nyttolast.källor));
+  assert.equal(s.styrka, 0);
+});
+
+test('sammanfatta och översätt pekas till Mötet och Översättaren med låg styrka', () => {
+  const m = nyttMinne(torget());
+  const a = m.fraga('@kollegan sammanfatta #bygge');
+  assert.match(a.nyttolast.svar, /Mötet.*marcuslind/);
+  assert.ok(a.styrka <= 30);
+  const b = m.fraga('kan du översätta det här till engelska?');
+  assert.match(b.nyttolast.svar, /Översättaren.*leif/);
+  assert.ok(b.styrka <= 30);
+});
+
+test('ägare plus senaste signal: "vad händer i pulsen just nu, vem driver det"', () => {
+  const h = [{ id: 500, ts: Date.now() - 120000, typ: 'puls.tempo', kvarter: 'team-martin', styrka: 70, nyttolast: { inlägg_per_minut: 4 } }];
+  const m = nyttMinne(torget(), h);
+  const s = m.fraga('Vad händer i Pulsen just nu, vem driver det?');
+  assert.match(s.nyttolast.svar, /team-martin bygger Pulsen/);
+  assert.match(s.nyttolast.svar, /puls\.tempo/);
+});
+
+test('signal från en annan förmåga', () => {
+  const h = [{ id: 501, ts: Date.now() - 60000, typ: 'stämning.läge', kvarter: 'tomhol', styrka: 60, nyttolast: 'glad' }];
+  const m = nyttMinne(torget(), h);
+  const s = m.fraga('hur är stämningen?');
+  assert.match(s.nyttolast.svar, /tomhol stämning\.läge/);
+});
+
+test('långa påståenden utan frågetecken får låg styrka, fritext max 80', () => {
+  const p = torget();
+  p.push(post('heimlen', 'bygge', 'Granskaren kontrollerar svar.utkast mot källorna innan Rösten publicerar.'));
+  const m = nyttMinne(p);
+  const lang = 'Granskaren kontrollerar svar.utkast mot källorna innan publicering. '.repeat(6);
+  assert.ok(lang.length > 280);
+  assert.ok(m.fraga(lang).styrka <= 40);
+  const kort = m.fraga('granskaren kontrollerar källorna?');
+  assert.ok(kort.styrka > 0 && kort.styrka <= 80, String(kort.styrka));
+});
+
+test('inget underlag ger styrka 0', () => {
+  const m = nyttMinne(torget());
+  assert.equal(m.fraga('vad kostar en flygbiljett till Tokyo?').styrka, 0);
+});
+
+test('en fråga besvaras en gång, även när Kön skickar den igen', () => {
+  const m = nyttMinne(torget());
+  const e = { id: 7000, ts: Date.now(), typ: 'fråga.ny', kvarter: 'surret', nyttolast: { fråga: 'vem bygger kön?' } };
+  m.mod.onEvent(e, m.ctx);
+  m.mod.onEvent(e, m.ctx);
+  m.mod.onEvent({ id: 7001, ts: Date.now(), typ: 'fråga.prioriterad', kvarter: 'fralle', orsak: 7000, nyttolast: { fråga: 'vem bygger kön?' } }, m.ctx);
+  m.mod.onEvent({ id: 7002, ts: Date.now(), typ: 'fråga.prioriterad', kvarter: 'fralle', nyttolast: { fråga: 'vem bygger kön?', fråga_id: 7000 } }, m.ctx);
+  assert.equal(m.skickat.filter(s => s.typ === 'minne.träff').length, 1);
+});
+
+test('svar från före omstart räknas som besvarade', () => {
+  const h = [{ id: 8000, ts: Date.now(), typ: 'fråga.ny', kvarter: 'surret', nyttolast: { fråga: 'vem bygger kön?' } },
+    { id: 8001, ts: Date.now(), typ: 'minne.träff', kvarter: 'holminator', orsak: 8000, nyttolast: { fråga: 'vem bygger kön?', svar: 'x' } }];
+  const m = nyttMinne(torget(), h);
+  m.mod.onEvent(h[0], m.ctx);
+  assert.equal(m.skickat.length, 0);
+});
+
+test('upprepad fråga noteras', () => {
+  const m = nyttMinne(torget());
+  m.fraga('vem bygger kön?');
+  assert.match(m.fraga('vem bygger kön nu?').nyttolast.svar, /Samma fråga ställdes/);
+});
+
+test('nya fakta i drift köas som kunskap.ny, inlästa fakta gör det inte', async () => {
+  const m = nyttMinne(torget());
+  assert.equal((await m.get('/status')).kö, 0);
+  m.mod.onMessage(post('heimlen', 'bygge', 'heimlen tar förmågan Granskaren.'), m.ctx);
+  m.mod.onMessage(post('release-agenten', 'bygge', 'PR inne från heimlen: https://github.com/x/y/pull/11'), m.ctx);
+  assert.equal((await m.get('/status')).kö, 2);
+});
+
+test('bussens egna inlägg blir inte poster', async () => {
+  const m = nyttMinne(torget());
+  const fore = (await m.get('/status')).poster;
+  m.mod.onMessage(post('surret', 'kollegan-events', '{"typ":"fråga.ny"}'), m.ctx);
+  assert.equal((await m.get('/status')).poster, fore);
+});
+
+test('HTTP: /status, /tidslinje, /sok, okänd väg och POST', async () => {
+  const m = nyttMinne(torget());
+  assert.ok((await m.get('/status')).poster > 0);
+  const tl = await m.get('/tidslinje');
+  assert.ok(Array.isArray(tl.fack) && tl.fack.length > 0);
+  assert.match((await m.get('/sok?q=vem%20bygger%20minnet')).svar, /holminator bygger Minnet/);
+  assert.equal(await m.get('/finns-inte'), false);
+  assert.equal(await m.mod.handle({ method: 'POST' }, {}, { path: '/sok', url: new URL('http://x/') }), false);
+  assert.equal(m.skickat.length, 0, '/sok skickar inget på bussen');
+});

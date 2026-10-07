@@ -54,7 +54,8 @@ function utdrag(text, n = 140) {
   const t = String(text || '').replace(/\s+/g, ' ').trim();
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
 }
-function klocka(ts) { return new Date(ts).toTimeString().slice(0, 5); }
+// Servern går i UTC, rummet i Stockholm.
+function klocka(ts) { return new Date(ts).toLocaleTimeString('sv-SE', { timeZone: 'Europe/Stockholm', hour: '2-digit', minute: '2-digit' }); }
 function versal(s) { s = s.toLowerCase(); return s.charAt(0).toUpperCase() + s.slice(1); }
 
 // "holminator tar förmågan Minnet", "Team tomhol tar förmågan Stämningen", "fralle tar Kön", "X takes the Ear"
@@ -62,8 +63,10 @@ const ANSPRAK = [
   /\btar\s+(?:förmågan|organet|rollen)\s+([A-ZÅÄÖa-zåäö-]{3,30})/i,
   /\btar\s+en\s+egen\s+förmåga[^:]*:\s*([A-ZÅÄÖa-zåäö-]{3,30})/i,
   /\btar\s+([A-ZÅÄÖ][a-zåäö-]{2,30})\b/,
-  /\b(?:takes?|claims?)\s+(?:the\s+)?(?:capability\s+)?([A-Za-z-]{3,30})(?:\s+capability)?/i,
+  /\b(?:takes?|claims?)\s+(?:the\s+)?(?:capability\s+)?([A-Za-z-]{3,30})\b/i,
 ];
+const ENGELSKA = { ear: 'Örat', memory: 'Minnet', voice: 'Rösten', reviewer: 'Granskaren', translator: 'Översättaren', mood: 'Stämningen',
+  queue: 'Kön', meeting: 'Mötet', pilot: 'Lotsen', pulse: 'Pulsen', curiosity: 'Nyfikenheten' };
 const INTE_FORMAGA = new Set(['en', 'ett', 'den', 'det', 'the', 'over', 'hand', 'care', 'part', 'that', 'this', 'lite']);
 // Förmågorna i PROJEKT.md. Egna förmågor ("tar en egen förmåga: Nyfikenheten") läggs till när de ropas.
 const KANDA = new Set(['örat', 'minnet', 'rösten', 'granskaren', 'översättaren', 'stämningen', 'kön', 'mötet', 'lotsen']);
@@ -73,6 +76,11 @@ function hittaAnsprak(m) {
     const r = ANSPRAK[i].exec(m.text);
     if (!r || INTE_FORMAGA.has(r[1].toLowerCase())) continue;
     if (i === 2 && !KANDA.has(r[1].toLowerCase())) continue;   // "tar X" utan "förmågan" gäller bara kända namn
+    if (i === 3) {                                              // engelska: bara kända namn, "it takes time" är ingen förmåga
+      const sv = ENGELSKA[r[1].toLowerCase()];
+      if (sv) return sv;
+      continue;
+    }
     if (i < 2) KANDA.add(r[1].toLowerCase());
     return versal(r[1]);
   }
@@ -140,12 +148,29 @@ function minnsHandelse(e) {
 
 const kalla = p => ({ id: p.id, från: p.from, kanal: p.channel, utdrag: utdrag(p.text) });
 
+// Vilken förmåga äger en sorts fråga. Minnet pekar dit i stället för att gissa.
+const UPPDRAG = [
+  { re: /sammanfatta|summar/, förmåga: 'mötet' },
+  { re: /översätt|translat|på engelska|in english|på svenska|in swedish/, förmåga: 'översättaren' },
+];
+
 // Uppslaget. Returnerar { svar, styrka, källor }.
-function slaUpp(fraga) {
-  const q = String(fraga || '');
-  const fragOrd = ord(q);
+function slaUppInre(q, egetInlagg) {
+  // Engelska förmågenamn i frågan översätts: "who builds the voice" frågar efter Rösten.
+  const fragOrd = ord(q).map(w => (ENGELSKA[w] ? ENGELSKA[w].toLowerCase() : w));
   const lc = q.toLowerCase();
   const formagor = [...st.formagor.values()];
+
+  for (const u of UPPDRAG) {
+    if (!u.re.test(lc)) continue;
+    const f = st.formagor.get(u.förmåga);
+    const namn = f ? f.förmåga : versal(u.förmåga);
+    return {
+      svar: `Det är ${namn}s uppgift` + (f ? `, som ${f.team} bygger.` : ', som ingen har tagit än.') + ' Minnet har inget eget svar.',
+      styrka: 20,
+      källor: f ? [{ id: f.inlägg, från: f.team, kanal: 'bygge', utdrag: `${f.team} bygger ${namn}` }] : [],
+    };
+  }
 
   // Leveranser: vem är klar, vilka PR:ar finns.
   if (/levere|\bklar|\bpr\b|pull request|deliver|\bdone\b|mergad|merged/.test(lc)) {
@@ -172,15 +197,17 @@ function slaUpp(fraga) {
     const traff = formagor.filter(x => fragOrd.some(w => sammaStam(x.förmåga.toLowerCase(), w) || sammaStam(x.team.toLowerCase(), w)));
     const lista = traff.length ? traff : formagor;
     const rad = x => `${x.team} bygger ${x.förmåga}` + (st.leveranser.has(x.team) ? ' (levererad)' : '');
+    // Frågar man om en enda förmåga, ta med vad den senast sa på bussen: "vad händer i pulsen och vem driver det?".
+    const sig = traff.length === 1 ? senasteSignalFran(traff[0].team) : null;
     return {
-      svar: (traff.length ? '' : `${formagor.length} förmågor är tagna: `) + lista.map(rad).join(', ') + '.',
+      svar: (traff.length ? '' : `${formagor.length} förmågor är tagna: `) + lista.map(rad).join(', ') + '.' + (sig ? ' ' + signalText(sig) : ''),
       styrka: traff.length ? (traff.every(x => x.källa === 'ledning') ? 95 : 85) : 70,
       källor: lista.slice(0, 4).map(x => ({ id: x.inlägg, från: x.källa === 'ledning' ? 'ledarens-agent' : x.team, kanal: 'bygge', utdrag: `${x.team} bygger ${x.förmåga}` })),
     };
   }
 
-  // Beslut: det som skrivits med BESLUT eller DECISION.
-  if (/beslut|bestämt|decid|decision|röst|vote/.test(lc)) {
+  // Beslut: det som skrivits med BESLUT eller DECISION. Inte "röst" ensamt, det matchar Rösten.
+  if (/beslut|bestämt|decid|decision|omröstning|röstade|\bvote/.test(lc)) {
     const b = st.poster.filter(p => /\b(BESLUT|DECISION)\b/.test(p.text)).slice(-3);
     if (b.length) return { svar: utdrag(b[b.length - 1].text, 300), styrka: 85, källor: b.map(kalla) };
   }
@@ -195,24 +222,15 @@ function slaUpp(fraga) {
   if (!fragOrd.length) return { svar: 'Minnet hittar inga sökord i frågan.', styrka: 0, källor: [] };
 
   // De andra förmågornas senaste signal: "hur är stämningen", "pulsen i #bygge".
-  for (let i = st.handelser.length - 1; i >= 0 && i >= st.handelser.length - 300; i--) {
-    const e = st.handelser[i];
-    if (/^(minne|fråga|kunskap)\./.test(e.typ)) continue;
-    const delar = e.typ.split('.');
-    if (fragOrd.some(w => sammaStam(delar[0], w))) {
-      return {
-        svar: `Senast ${klocka(e.ts)} skickade ${e.kvarter} ${e.typ}` + (e.styrka != null ? ` med styrka ${e.styrka}` : '') +
-          (e.nyttolast ? ': ' + utdrag(typeof e.nyttolast === 'string' ? e.nyttolast : JSON.stringify(e.nyttolast), 220) : '.'),
-        styrka: Math.max(50, 90 - Math.round((Date.now() - e.ts) / 60000) * 2),
-        källor: [{ id: e.id, från: e.kvarter, kanal: BUSS, utdrag: e.typ }],
-      };
-    }
-  }
+  const sig = senasteSignal(fragOrd);
+  if (sig) return { svar: signalText(sig), styrka: Math.max(50, 90 - Math.round((Date.now() - sig.ts) / 60000) * 2), källor: [{ id: sig.id, från: sig.kvarter, kanal: BUSS, utdrag: sig.typ }] };
 
   // Fritext: andel av frågans ord som finns i inlägget. Nyare väger lite tyngre, flera team som säger samma sak höjer säkerheten.
+  // Frågor till Kollegan och Kollegans egna svar är inte kunskap, och frågan får aldrig svara på sig själv.
   const nu = Date.now();
   const traffar = [];
   for (const p of st.poster) {
+    if (p.id === egetInlagg || /@kollegan\b/i.test(p.text) || /^kollegan\s*:/i.test(p.text)) continue;
     let s = 0;
     for (const w of fragOrd) if (harOrd(p.ord, w)) s += 1;
     if (!s) continue;
@@ -226,9 +244,39 @@ function slaUpp(fraga) {
   const team = new Set(basta.filter(x => x.s >= 0.34).map(x => x.p.from)).size;
   return {
     svar: `${top.from} skrev ${klocka(top.ts)} i #${top.channel}: ${utdrag(top.text, 220)}`,
-    styrka: Math.min(95, Math.round(basta[0].s * 80) + (team > 1 ? 10 : 0)),
+    // Ett citerat inlägg är underlag, inte ett säkert svar: tak 80.
+    styrka: Math.min(80, Math.round(basta[0].s * 70) + (team > 1 ? 10 : 0)),
     källor: basta.map(({ p }) => kalla(p)),
   };
+}
+
+function senasteSignal(fragOrd) {
+  for (let i = st.handelser.length - 1; i >= 0 && i >= st.handelser.length - 300; i--) {
+    const e = st.handelser[i];
+    if (/^(minne|fråga|kunskap|svar)\./.test(e.typ)) continue;
+    const forsta = e.typ.split('.')[0];
+    if (fragOrd.some(w => sammaStam(forsta, w))) return e;
+  }
+  return null;
+}
+function senasteSignalFran(team) {
+  for (let i = st.handelser.length - 1; i >= 0 && i >= st.handelser.length - 300; i--) {
+    const e = st.handelser[i];
+    if (e.kvarter === team && !/^(minne|fråga|kunskap|svar)\./.test(e.typ) && Date.now() - e.ts < 30 * 60000) return e;
+  }
+  return null;
+}
+function signalText(e) {
+  return `Senast ${klocka(e.ts)} skickade ${e.kvarter} ${e.typ}` + (e.styrka != null ? ` med styrka ${e.styrka}` : '') +
+    (e.nyttolast ? ': ' + utdrag(typeof e.nyttolast === 'string' ? e.nyttolast : JSON.stringify(e.nyttolast), 200) : '.');
+}
+
+// Uppslaget som andra förmågor får. Långa påståenden utan frågetecken är sällan riktiga frågor: sänk säkerheten.
+function slaUpp(fraga, egetInlagg) {
+  const u = slaUppInre(String(fraga || ''), egetInlagg);
+  const q = String(fraga || '');
+  if (q.length > 280 && !q.includes('?') && u.styrka > 40) u.styrka = 40;
+  return u;
 }
 
 // Har någon redan frågat ungefär samma sak?
@@ -303,7 +351,7 @@ module.exports = {
     const fraga = n.fråga || n.fraga || n.text || n.question || '';
     if (!fraga) return;
     st.besvarat.add(e.id);
-    const u = slaUpp(fraga);
+    const u = slaUpp(fraga, Number(n.inlägg) || null);
     const forr = tidigareFraga(fraga);
     const svar = u.svar + (forr ? ` (Samma fråga ställdes ${klocka(forr.ts)}.)` : '');
     const nyttolast = { fråga: utdrag(fraga, 200), svar: utdrag(svar, 400), källor: u.källor, kanal: n.kanal, inlägg: n.inlägg };
