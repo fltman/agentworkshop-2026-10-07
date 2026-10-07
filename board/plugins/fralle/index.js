@@ -18,6 +18,7 @@ const MAX_PER_REQUESTER = 10;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 60000;
 const LEASE_TIME = 120000;
+const PARK_TIME = 120000;
 const STALL_TIME = 300000;
 const STAGES = ['väntar', 'påbörjad', 'väntar på granskning', 'granskat'];
 const NEXT_STEPS = {
@@ -88,7 +89,20 @@ function turnExplanation(earlier, later, served) {
 function queue(now = Date.now()) {
   const served = new Map(state.served.map(item => [item.key, item.turn]));
   const groups = new Map();
-  for (const item of state.questions.filter(question => question.status === 'väntar')) {
+  const pending = state.questions.filter(question => question.status === 'väntar');
+  const describe = item => {
+    const progress = item.framsteg || (item.steg === 'väntar'
+      ? { id: item.id, typ: 'fråga.ny', ts: item.ts, kvarter: null } : null);
+    const elapsed = Number.isFinite(progress?.ts) ? Math.max(0, now - progress.ts) : null;
+    return {
+      ...item, prioritet: Math.min(99, item.basprioritet + Math.floor(Math.max(0, now - item.ts) / 60000) * 2),
+      väntetid_sek: Math.floor(Math.max(0, now - item.ts) / 1000),
+      framsteg: progress, senaste_observation: item.senaste_observation || progress,
+      utan_framsteg_sek: elapsed === null ? null : Math.floor(elapsed / 1000),
+      uppmärksamhet: elapsed !== null && elapsed >= STALL_TIME, nästa_steg: NEXT_STEPS[item.steg],
+    };
+  };
+  for (const item of pending.filter(question => question.parkerad_ts === undefined)) {
     const key = requesterKey(item.frågare);
     if (!groups.has(key)) groups.set(key, { key, name: item.frågare, questions: [], ts: item.ts, id: item.id });
     const group = groups.get(key);
@@ -96,16 +110,7 @@ function queue(now = Date.now()) {
       group.ts = item.ts;
       group.id = item.id;
     }
-    const progress = item.framsteg || (item.steg === 'väntar'
-      ? { id: item.id, typ: 'fråga.ny', ts: item.ts, kvarter: null } : null);
-    const elapsed = Number.isFinite(progress?.ts) ? Math.max(0, now - progress.ts) : null;
-    group.questions.push({
-      ...item, prioritet: Math.min(99, item.basprioritet + Math.floor(Math.max(0, now - item.ts) / 60000) * 2),
-      väntetid_sek: Math.floor(Math.max(0, now - item.ts) / 1000),
-      framsteg: progress, senaste_observation: item.senaste_observation || progress,
-      utan_framsteg_sek: elapsed === null ? null : Math.floor(elapsed / 1000),
-      uppmärksamhet: elapsed !== null && elapsed >= STALL_TIME, nästa_steg: NEXT_STEPS[item.steg],
-    });
+    group.questions.push(describe(item));
   }
   const ordered = [...groups.values()].sort((a, b) =>
     (served.get(a.key) || 0) - (served.get(b.key) || 0) || a.ts - b.ts || a.id - b.id);
@@ -130,7 +135,11 @@ function queue(now = Date.now()) {
       });
     }
   }
-  return result;
+  return [...result, ...pending.filter(item => item.parkerad_ts !== undefined).map(item => ({
+    ...describe(item), köplats: null, varv: null,
+    turförklaring: 'Parkerad efter två minuter utan reservation. Frågan är bevarad men blockerar inte nästa tilldelning.',
+    prioritetsförklaring: 'Parkerade frågor deltar inte i turordningen. Ställ frågan på nytt om den fortfarande behövs.',
+  }))];
 }
 
 function markTurn(item) {
@@ -229,6 +238,7 @@ function dispatch(item, { board }, now = Date.now()) {
     return;
   }
   item.prioritetshändelse = result.handelse.id;
+  if (next(now)?.id === item.id) item.huvud_sedan = now;
   item.utskick.nästa_försök = null;
   item.utskick.fel = null;
   save();
@@ -239,9 +249,28 @@ function tick(context, now = Date.now()) {
   let changed = false;
   for (const item of state.questions) {
     if (item.reservation && item.reservation.till <= now) {
+      item.huvud_sedan = null;
       delete item.reservation;
       changed = true;
       report(item.id, new Error('Reservationen löpte ut. Frågan kan reserveras på nytt.'));
+    }
+  }
+  let head = next(now);
+  while (head) {
+    const item = state.questions.find(question => question.id === head.id);
+    if (item.huvud_sedan === undefined || item.huvud_sedan === null) {
+      item.huvud_sedan = item.huvud_sedan === undefined ? item.ts : now;
+      changed = true;
+    }
+    if (item.utskick.nästa_försök !== null || now - item.huvud_sedan < PARK_TIME) break;
+    item.parkerad_ts = now;
+    changed = true;
+    head = next(now);
+  }
+  for (const item of state.questions) {
+    if (item.status === 'väntar' && item.id !== head?.id && item.huvud_sedan !== null) {
+      item.huvud_sedan = null;
+      changed = true;
     }
   }
   if (changed) save();
@@ -304,6 +333,7 @@ function accept(event, { board, team }) {
     kanal: typeof payload.kanal === 'string' ? payload.kanal.slice(0, 30) : null,
     basprioritet: urgent ? 80 : 50, status: 'väntar', steg: 'väntar',
     framsteg: eventInfo(event), senaste_observation: eventInfo(event),
+    huvud_sedan: null,
     utskick: { försök: 0, nästa_försök: null, fel: null },
     mottagare: recipients(payload, board, team),
     motivering: urgent ? 'Frågan innehåller en uttrycklig brådske- eller blockeringssignal.' : 'Normal prioritet; äldre frågor får högre prioritet med tiden.',
@@ -314,9 +344,9 @@ function accept(event, { board, team }) {
   dispatch(item, { board, team });
 }
 
-function next() {
+function next(now = Date.now()) {
   if (state.questions.some(item => item.status === 'väntar' && item.reservation)) return null;
-  return queue()[0] || null;
+  return queue(now).find(item => item.parkerad_ts === undefined) || null;
 }
 
 function json(res, code, body) {
@@ -361,6 +391,7 @@ async function claim(req, res, context) {
   }
   const item = state.questions.find(question => question.id === selected.id);
   item.reservation = { team: body.team, till: Date.now() + LEASE_TIME };
+  item.huvud_sedan = null;
   const observation = { id: null, typ: 'reservation', ts: Date.now(), kvarter: body.team };
   if (item.steg === 'väntar') {
     item.steg = 'påbörjad';
@@ -428,6 +459,13 @@ module.exports = {
             (item[field].kvarter === null || typeof item[field].kvarter === 'string'))))) {
           throw new Error('Ogiltig framstegshistorik i Köns sparade tillstånd.');
         }
+        if (!state.questions.every(item =>
+          (item.parkerad_ts === undefined || Number.isFinite(item.parkerad_ts) && item.parkerad_ts >= 0) &&
+          (item.huvud_sedan === undefined || item.huvud_sedan === null ||
+            Number.isFinite(item.huvud_sedan) && item.huvud_sedan >= 0) &&
+          !(item.parkerad_ts !== undefined && item.reservation))) {
+          throw new Error('Ogiltig parkering i Köns sparade tillstånd.');
+        }
       }
       for (const event of board.events(500)) {
         if (event.kvarter === team && event.typ === 'fråga.prioriterad') {
@@ -441,6 +479,7 @@ module.exports = {
         if (event.kvarter !== team && LIFECYCLE.includes(event.typ)) accept(event, { board, team });
       }
       save();
+      tick({ board, team });
     } catch (error) {
       storageError = error.message;
       throw error;
@@ -477,6 +516,8 @@ module.exports = {
         äldsta_väntetid_sek: Math.max(0, ...active.map(item => item.väntetid_sek)),
         frågare: new Set(active.map(item => requesterKey(item.frågare))).size,
         senaste_reservation: state.lastClaim,
+        parkerade: active.filter(item => item.parkerad_ts !== undefined).length,
+        parkering_gräns_sek: PARK_TIME / 1000,
         utan_framsteg: active.filter(item => item.uppmärksamhet).length,
         utan_framsteg_gräns_sek: STALL_TIME / 1000,
       },
@@ -489,6 +530,7 @@ module.exports = {
     try {
       if (storageError) throw new Error('Köns lagring är otillgänglig: ' + storageError);
       accept(event, context);
+      tick(context);
     } catch (error) {
       report(event.id, error);
     }
@@ -503,7 +545,9 @@ module.exports = {
       let response;
       if (!item) response = 'Ingen aktiv fråga med det händelse-id:t finns i Kön.';
       else if (requesterKey(item.frågare) !== requesterKey(message.from)) response = 'Du kan bara återkalla frågor med ditt eget angivna frågarnamn.';
-      else if (item.steg !== 'väntar' || item.reservation) response = 'Frågan har redan börjat behandlas och kan inte återkallas.';
+      else if (item.reservation || item.steg !== 'väntar' && item.parkerad_ts === undefined) {
+        response = 'Frågan har redan börjat behandlas och kan inte återkallas.';
+      }
       else {
         item.status = 'återkallad';
         item.steg = 'återkallad';

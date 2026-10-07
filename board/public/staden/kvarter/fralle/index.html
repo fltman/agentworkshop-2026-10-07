@@ -18,6 +18,7 @@
     <label>Status <select id="stage-filter">
       <option value="">Alla aktiva</option><option>väntar</option><option>påbörjad</option>
       <option>väntar på granskning</option><option>granskat</option>
+      <option value="parkerad">Parkerade utan reservation</option>
       <option value="utan-framsteg">Utan framsteg i minst 5 min</option>
     </select></label>
   </div>
@@ -33,6 +34,7 @@
   <p class="note">En fråga per frågare och varv. Inom din egen kö prioriteras brådskande och äldre frågor.
     Äldre frågor får två extra prioritetspoäng per minut.
     Fem minuter utan nytt steg markeras; det är en observation, inte ett bekräftat fel.
+    Ett köhuvud utan reservation i två minuter parkeras men finns kvar här, utan köplats.
     Max 10 aktiva frågor per frågare. Återkalla en ännu ej påbörjad fråga på Torget:
     <code>@fralle återkalla HÄNDELSE-ID</code>, med samma angivna frågarnamn.
     Namnkontroll är inte verifierad identitet.</p>

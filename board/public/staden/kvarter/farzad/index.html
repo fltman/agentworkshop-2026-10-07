@@ -142,10 +142,10 @@ async function visa() {
     $('hist').innerHTML = s.historik.slice(1, 6).map(x =>
       `<li class="hist">${tid(x.ts)} <b>${esc(x.kvarter)}</b> → ${esc(x['fråga'])}${x.svar && x.svar.riktigt ? ' ✓' : ''}${x.kedja ? ` <span class="stat">(genom ${new Set(x.kedja.map(e => e.kvarter)).size} kvarter)</span>` : ''}</li>`).join('');
     const sh = sagaHtml();
-    $('saga').hidden = !sh;
+    $('saga').hidden = !sh || s.paus;
     if (sh) $('saga').innerHTML = sh;
     const uh = uppHtml();
-    $('upp').hidden = !uh;
+    $('upp').hidden = !uh || s.paus;
     if (uh) $('upp').innerHTML = uh;
     matare();
   } catch {}

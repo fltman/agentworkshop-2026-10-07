@@ -37,9 +37,9 @@ visar samma detaljer i sitt `mottagare`-fält.
 Minnet kan fortsätta samla underlag direkt från `fråga.ny`. För faktisk
 turordning behöver Rösten använda reservations-API:t nedan i stället för
 att publicera svar direkt på varje inkommande fråga. Den integrationen
-ägs av mikael. Rösten har lagt till anrop i PR #38, men dess uppgivna
-fallback efter `409` kringgår kön; korrekt avslagshantering och faktisk
-turordning är ännu inte verifierade. Bussen äger kedjedjupet och sina
+ägs av mikael. PR #52 stoppar publicering efter nekad reservation,
+men konsumtion av aktuellt `/next` är fortfarande nödvändig.
+Bussen äger kedjedjupet och sina
 trafikgränser; Kön kringgår dem inte.
 
 `svar.klart` avslutar en fråga genom `nyttolast.fråga_id`, orsakskedjan,
@@ -172,6 +172,33 @@ reservationen före publicering och ange `fråga_id` i `svar.klart`, som
 frigör reservationen. En utgången reservation frigörs automatiskt,
 rapporteras som fel och får tas på nytt efter aktuell turordning.
 Det finns inget separat release-anrop.
+
+### Parkering av obesvarat köhuvud
+
+Ett tillgängligt köhuvud parkeras efter **120 sekunder utan reservation**.
+Klockan börjar när frågan blir tillgänglig först i kön. Lyckad första
+prioritering ger en ny frist. För äldre sparade frågor utan köhuvudstid
+används frågans ankomst vid första uppgraderingen. Schemalagda återförsök vid
+bussens minutgräns slutförs först, så parkering inte bryter den godkända
+återförsökspolicyn. En fråga som väntar bakom en aktiv reservation eller ett
+annat huvud förlorar inte sin frist. När den blir först får den två minuter;
+en tidigare reserverad fråga får samma frist när den åter blir tillgänglig.
+
+Parkering är **inte radering, återkallning, svar eller bekräftat misslyckande**.
+Frågan behålls i `/status` och dashboarden, märkt parkerad och utan köplats.
+`/next` och `/claim` hoppar över den och ger andra frågare möjlighet att gå
+vidare. Alla redan för gamla huvuden kan parkeras i samma underhållsvarv.
+En aktiv reservation skyddas och stoppar nya tilldelningar som tidigare.
+Parkering förbrukar ingen behandlingstur och återställer inte framstegsklockan.
+
+`parkerad_ts` och `huvud_sedan` sparas i version 3 som valfria
+metadata. Statistiken visar `parkerade` och `parkering_gräns_sek`.
+Parkering har ett eget filter. Samma angivna frågare kan återkalla en parkerad
+fråga, även om underlag redan observerats; en reserverad fråga kan fortfarande
+inte återkallas. Behövs frågan fortfarande, ställ den på nytt.
+Parkerade frågor räknas fortsatt mot gränserna 10 per frågare och 100 totalt:
+ingen obekräftad fråga kastas bort eller göms. Ett senare observerat
+`svar.klart` kan fortfarande avsluta den bevarade originalfrågan.
 
 ## Återförsök och återkallning
 

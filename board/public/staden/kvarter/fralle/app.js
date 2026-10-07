@@ -43,13 +43,15 @@ function render(state) {
   requesterFilter.value = names.has(selected) ? selected : '';
   const filtered = state.kö.filter(item =>
     (!requesterFilter.value || requesterKey(item.frågare) === requesterFilter.value) &&
-    (!stageFilter.value || (stageFilter.value === 'utan-framsteg' ? item.uppmärksamhet : item.steg === stageFilter.value)));
+    (!stageFilter.value || (stageFilter.value === 'utan-framsteg' ? item.uppmärksamhet
+      : stageFilter.value === 'parkerad' ? item.parkerad_ts !== undefined : item.steg === stageFilter.value)));
   document.getElementById('queue-heading').textContent = `Aktiva frågor (${filtered.length} av ${state.kö.length})`;
   const stats = state.statistik;
   document.getElementById('statistics').textContent =
     `${stats.aktiva} aktiva · ${stats.väntande} väntande · ${stats.påbörjade} påbörjade · ` +
     `${stats.granskning} i granskning · ${stats.frågare} frågare · äldsta väntetid ${duration(stats.äldsta_väntetid_sek)} · ` +
-    `${stats.utan_framsteg} utan framsteg i minst ${duration(stats.utan_framsteg_gräns_sek)}`;
+    `${stats.utan_framsteg} utan framsteg i minst ${duration(stats.utan_framsteg_gräns_sek)}` +
+    ` · ${stats.parkerade ?? 0} parkerade`;
   document.getElementById('coordination').textContent = stats.senaste_reservation
     ? 'Rösten har använt reservation. Det bevisar inte att alla svar följer Kön: Rösten måste respektera avslag och förnya före publicering.'
     : 'Rösten har ännu inte reserverat någon fråga. Köns ordning är därför fortfarande vägledande.';
@@ -62,7 +64,10 @@ function render(state) {
     });
     const time = new Date(item.ts).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
     const warning = item.uppmärksamhet ? 'Länge utan framsteg · ' : '';
-    card.append(element('summary', `${warning}#${item.köplats} · ${item.frågare} · ${item.steg} · ${duration(item.väntetid_sek)} · ${item.fråga}`));
+    const position = item.parkerad_ts === undefined ? `#${item.köplats}` : 'Parkerad · ingen köplats';
+    card.append(element('summary', `${warning}${position} · ${item.frågare} · ${item.steg} · ${duration(item.väntetid_sek)} · ${item.fråga}`));
+    if (item.parkerad_ts !== undefined) card.append(element('p',
+      'Två minuter utan reservation: frågan finns kvar, men blockerar inte andra. Återkalla den eller ställ den på nytt om den fortfarande behövs.', 'warning'));
     card.append(element('p', `Prioritet ${item.prioritet} · ${time} · Händelse ${item.id}`, 'meta'));
     card.append(element('strong', item.fråga));
     card.append(element('p', item.turförklaring));
@@ -100,7 +105,7 @@ function render(state) {
     }
     if (item.reservation) {
       card.append(element('p', `Reserverad av ${item.reservation.team} till ${new Date(item.reservation.till).toLocaleTimeString('sv-SE')}.`));
-    } else if (item.steg === 'väntar') {
+    } else if (item.steg === 'väntar' || item.parkerad_ts !== undefined) {
       card.append(element('p', `Återkalla på Torget som ${item.frågare}: @fralle återkalla ${item.id}`, 'meta'));
     }
     return card;

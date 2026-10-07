@@ -10,7 +10,10 @@
 //   GET /t/marcuslind/anteckningar       → de senaste anteckningarna, för rutan på /staden
 //   GET/POST /t/marcuslind/sms           → SMS i testläge (inget skickas), se sms.js
 
+//   GET /t/marcuslind/report-data        → V1-rapport för Rapportören (fralle), se report.js
+
 const sms = require('./sms');
+const report = require('./report');
 
 const MAX_HISTORIK = 30;
 const MAX_ANTECKNINGAR = 100;
@@ -114,6 +117,7 @@ module.exports = {
         return true;
       }
     }
+    if (report.hantera(req, res, ctx)) return true;
     if (req.method === 'GET' && path === '/sammanfattningar') {
       const historik = lasHistorik({ dataDir });
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });

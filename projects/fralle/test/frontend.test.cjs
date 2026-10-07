@@ -75,6 +75,25 @@ test('HTTP failure is visible and schedules a non-overlapping retry', async () =
   assert.equal(timers.length, 1);
 });
 
+test('parked roots remain visible without a false queue position and have a dedicated filter', async () => {
+  const state = data({ kö: [
+    { id: 101, köplats: 1, prioritet: 50, ts: Date.now(), fråga: 'Ny fråga', frågare: 'Bo' },
+    { id: 100, köplats: null, prioritet: 60, ts: Date.now(), fråga: 'Bevarad fråga', frågare: 'Anna',
+      steg: 'påbörjad', parkerad_ts: Date.now() },
+  ], statistik: { parkerade: 1 } });
+  const { ids } = await run(async () => ({ ok: true, json: async () => state }));
+  assert.equal(ids.questions.children.length, 2);
+  assert.match(ids.statistics.textContent, /1 parkerade/);
+  const parked = ids.questions.children[1];
+  assert.match(parked.children[0].textContent, /Parkerad · ingen köplats/);
+  assert.ok(!parked.children[0].textContent.includes('#null'));
+  assert.ok(parked.children.some(item => /@fralle återkalla 100/.test(item.textContent)));
+  ids['stage-filter'].value = 'parkerad';
+  ids['stage-filter'].listeners.change();
+  assert.equal(ids.questions.children.length, 1);
+  assert.match(ids.questions.children[0].children[0].textContent, /Bevarad fråga/);
+});
+
 test('bus failures are shown without pretending the pending question was dispatched', async () => {
   const state = data({
     förmågor: [], kö: [{ id: 100, köplats: 1, prioritet: 50, ts: Date.now(), fråga: 'Hej', frågare: 'Anna', mottagare: [], motivering: 'Normal' }],
