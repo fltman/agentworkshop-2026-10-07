@@ -7,6 +7,9 @@
 //
 //   GET /t/marcuslind/sammanfattningar   → de senaste sammanfattningarna, för rutan på /staden
 //   GET /t/marcuslind/anteckningar       → de senaste anteckningarna, för rutan på /staden
+//   GET/POST /t/marcuslind/sms           → SMS via Sinch till vitlistade alias, se sms.js
+
+const sms = require('./sms');
 
 const MAX_HISTORIK = 30;
 const MAX_ANTECKNINGAR = 100;
@@ -99,7 +102,17 @@ function sokAnteckningar(anteckningar, sokord) {
 }
 
 module.exports = {
-  async handle(req, res, { path, dataDir }) {
+  async handle(req, res, ctx) {
+    const { path, dataDir } = ctx;
+    if (path === '/sms') {
+      try {
+        return await sms.hantera(req, res, ctx);
+      } catch (e) {
+        console.error('[marcuslind] sms-route:', e.message);
+        if (!res.headersSent) { res.writeHead(500); res.end(); }
+        return true;
+      }
+    }
     if (req.method === 'GET' && path === '/sammanfattningar') {
       const historik = lasHistorik({ dataDir });
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
