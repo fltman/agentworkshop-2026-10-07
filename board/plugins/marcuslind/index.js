@@ -2,6 +2,7 @@
 //   Lyssnar på fråga.ny från Örat (surret) och reagerar på tre typer av frågor:
 //   1. "@kollegan sammanfatta #kanal"            → läser kanalens historik, skickar sammanfattning.klar
 //   2. "@kollegan anteckna/notera/kom ihåg ..."   → sparar en anteckning, skickar kunskap.ny som kvitto
+//                                                  och loggar ett test-SMS om anteckningen (sms.js)
 //   3. "@kollegan vad är antecknat om ..."        → söker sparade anteckningar, skickar kunskap.ny med svaret
 //   Mötet är stället där anteckningar och kunskap samlas in, inte bara ett sammanfattningsverktyg.
 //
@@ -176,8 +177,10 @@ module.exports = {
       if (!text) return;
       const kanal = nyttolast.kanal || 'torget';
       const anteckningar = lasAnteckningar(ctx);
-      anteckningar.push({ id: e.id, ts: e.ts, kanal, text, från: nyttolast.frågare || e.kvarter });
+      const anteckning = { id: e.id, ts: e.ts, kanal, text, från: nyttolast.frågare || e.kvarter };
+      anteckningar.push(anteckning);
       sparaAnteckningar(ctx, anteckningar);
+      sms.anteckningsSms(ctx.dataDir, anteckning);
 
       ctx.board.emit('kunskap.ny', {
         styrka: 90, // en bekräftad handling, inget att tvivla på
