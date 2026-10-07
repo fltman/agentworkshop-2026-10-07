@@ -2,7 +2,7 @@
 // byggd på något en annan förmåga just sett. Reagerar på andra kvarters händelser, aldrig på en tom timer.
 //
 //   lyssnar på  puls.*, stämning.*, kunskap.*, minne.*, och första händelsen från varje nytt kvarter,
-//               men bara händelser utan orsak (kedjans början)
+//               men inte kedjor som började med en fråga eller med oss själva
 //   skickar     nyfikenhet.fråga {fråga, kvarter, typ, inlägg, kanal}  med orsak = händelsen som väckte frågan
 //   postar      "@kollegan <fråga>" på Torget, så Örat tar den vidare genom kedjan
 //
@@ -39,16 +39,33 @@ function falt(n, ...namn) {
 
 function formulera(e) {
   const n = e.nyttolast;
-  const kanal = falt(n, 'kanal', 'channel').replace(/^#/, '');
+  const kanal = falt(n, 'kanal', 'channel', 'hetaste').replace(/^#/, '');
   const i = kanal ? ` i #${kanal}` : '';
   const amne = falt(n, 'ämne', 'amne', 'rubrik', 'sammanfattning', 'text', 'kunskap', 'fråga');
   const forled = e.typ.split('.')[0];
   if (forled === 'puls') return `Pulsen slår ${e.styrka >= 70 ? 'hårt' : 'på'}${i} just nu. Vad är det som händer där, och vem driver det?`;
-  if (forled === 'stämning') return `Stämningen skiftar${i}${amne ? ` (${amne})` : ''}. Vad har ändrats, och behöver någon hjälp?`;
+  if (forled === 'stämning') {
+    const s = (n && typeof n.signaler === 'object' && n.signaler) || {};
+    const tal = k => Number(s[k]) || 0;
+    if (tal('hinder') > 0 && tal('hinder') >= tal('fragor')) return `Det syns hinder${i} just nu. Vad är det som blockerar, och vem kan hjälpa?`;
+    if (tal('fragor') > 0) return `Det ställs många frågor${i} just nu. Vilken av dem är viktigast att få svar på?`;
+    if (tal('uppskattning') > 0) return `Det låter nöjt${i} just nu. Vad är det som har gått bra?`;
+    return `Stämningen skiftar${i}. Vad har ändrats, och behöver någon hjälp?`;
+  }
   if (forled === 'kunskap' || forled === 'minne') return amne
     ? `Minnet har fått syn på något: "${amne}". Vad betyder det för de andra teamen?`
     : `${e.kvarter} har lärt sig något nytt. Vad är det viktigaste som hänt den senaste kvarten?`;
   return `${e.kvarter} har precis börjat skicka ${e.typ}. Vad bygger ${e.kvarter}, och vem lyssnar på dem?`;
+}
+
+// Sant om händelsen hör till en kedja som började med en fråga eller med oss: svar på frågor
+// (minne.träff, puls.tryck ...) skulle annars få Kollegan att undra över sina egna frågor.
+function fragekedja(e, board, team) {
+  const byId = new Map(board.events(500).map(x => [x.id, x]));
+  for (let x = e, steg = 0; x && steg < 10; x = x.orsak ? byId.get(x.orsak) : null, steg++) {
+    if (x.kvarter === team || /^(fråga|nyfikenhet)\./.test(x.typ || '')) return true;
+  }
+  return false;
 }
 
 function spara() {
@@ -121,9 +138,7 @@ module.exports = {
 
   onEvent(e, { team, board }) {
     if (e.kvarter === team || !e.typ) return;
-    // Bara händelser som startar en kedja: svar på frågor (minne.träff, puls.tryck ...) skulle få Kollegan
-    // att undra över sina egna frågor.
-    if (e.orsak) return;
+    if (fragekedja(e, board, team)) return;
     const nytt = !st.settKvarter.has(e.kvarter);
     st.settKvarter.add(e.kvarter);
     if (!nytt && !INTRESSANT.test(e.typ)) return;
