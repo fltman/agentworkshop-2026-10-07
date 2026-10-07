@@ -33,7 +33,7 @@ async function fragaKollegan(fraga, opts = {}) {
   const bas = (opts.baseUrl || STANDARD_BAS).replace(/\/$/, '');
   const kanal = opts.kanal || 'torget';
   const from = opts.from || 'kollegan-klient';
-  const timeoutMs = opts.timeoutMs || 45000;
+  const timeoutMs = opts.timeoutMs || 120000; // Rösten kan vänta ~60 s på Köns tur innan den svarar ändå (mikael PR 64)
   const pollMs = opts.pollMs || 1500;
   const t0 = Date.now();
 
