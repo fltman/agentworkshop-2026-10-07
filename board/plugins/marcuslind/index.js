@@ -7,7 +7,7 @@
 //
 //   GET /t/marcuslind/sammanfattningar   → de senaste sammanfattningarna, för rutan på /staden
 //   GET /t/marcuslind/anteckningar       → de senaste anteckningarna, för rutan på /staden
-//   GET/POST /t/marcuslind/sms           → SMS via Sinch till vitlistade alias, se sms.js
+//   GET/POST /t/marcuslind/sms           → SMS i testläge (inget skickas), se sms.js
 
 const sms = require('./sms');
 
