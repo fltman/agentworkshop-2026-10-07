@@ -137,7 +137,7 @@ function las(e, team) {
   // Alla svar.* räknas, även svar.utkast: Rösten skickar det innan svaret postas på Torget.
   if (/^svar\./.test(e.typ) && e.kvarter !== team) st.svarsposter.add(e.kvarter);
   const n = e.nyttolast && typeof e.nyttolast === 'object' ? e.nyttolast : {};
-  if (e.typ === 'bild.klar' && n.till === team && typeof n.url === 'string' && /^\/t\/[\w-]+\//.test(n.url)) {
+  if (e.typ === 'bild.klar' && n.till === team && n.namn === 'portratt' && typeof n.url === 'string' && /^\/t\/[\w-]+\//.test(n.url)) {
     st.portratt = { url: n.url, prompt: String(n.prompt || '').slice(0, 300), ts: e.ts };
     return;
   }
