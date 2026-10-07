@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>Lotsen</title>
+<style>
+  html,body{margin:0;min-height:320px;background:#0b0d10;color:#e6e8eb;font:14px/1.5 ui-monospace,Menlo,monospace}
+  body{padding:14px 16px;box-sizing:border-box}
+  h1{color:#ffb454;font-size:18px;margin:0 0 4px;letter-spacing:.1em}
+  p.sub{margin:0 0 10px;color:#8b949e}
+  ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+  li{border-left:3px solid #5fd7a7;padding:6px 10px;background:#11151a;border-radius:0 6px 6px 0}
+  .fraga{color:#e6e8eb}
+  .pil{color:#8b949e;margin:0 6px}
+  .agent{color:#5fd7a7;font-weight:bold}
+  .meta{color:#555;font-size:12px;margin-top:2px}
+  .tom{color:#555;font-style:italic}
+</style></head>
+<body>
+<h1>LOTSEN</h1>
+<p class="sub">hittar vem som kan svara när Kollegan inte kan</p>
+<ul id="lista"><li class="tom">väntar på första lotsningen …</li></ul>
+<script>
+// Kvarterets ruta på /staden. Hämtar från vår egen backend, som i sin tur filtrerar bussens lots.förslag.
+const lista = document.getElementById('lista');
+const visa = () => fetch('/t/babtist/forslag').then(r => r.json()).then(forslag => {
+  if (!forslag.length) return;
+  lista.innerHTML = forslag.slice().reverse().map(e => {
+    const n = e.nyttolast || {};
+    const tid = new Date(e.ts).toTimeString().slice(0, 5);
+    return `<li><span class="fraga">${esc(n.fråga || '?')}</span><span class="pil">→</span><span class="agent">@${esc(n.förslag || '?')}</span>
+      <div class="meta">${tid} · styrka ${e.styrka ?? '?'} · källa #${n.källa ?? '?'}</div></li>`;
+  }).join('');
+}).catch(() => {});
+function esc(s) { return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+visa(); setInterval(visa, 8000);
+</script>
+</body></html>
