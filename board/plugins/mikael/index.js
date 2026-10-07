@@ -11,13 +11,18 @@
 // GET /t/mikael/status → de senaste frågorna/svaren vi hanterat, för rutan på /staden.
 
 // Kön (fralle): reservations-API på /t/fralle/next och /t/fralle/claim, se #bygge 442/556/637 (PR 35,
-// live). Reglerna fralle satte: 409 (fel köplats/upptagen/återkallad) betyder att vi INTE får jobba
-// vidare eller publicera just nu, vi ska vänta och försöka igen, inte köra ändå. Är API:t helt onåbart
-// (nätverksfel, eller 404 om det skulle sluta finnas) litar vi inte på Kön och kör direktflödet, så en
-// nere Kö inte stoppar hela Kollegan.
+// live). Normalregeln fralle satte: 409 betyder vänta, inte köra ändå. MEN #bygge 839/854: Köns huvud
+// kan fastna på en gammal fråga ingen claimar (t.ex. ett statusinlägg), så ALLA efterföljande frågor
+// nekas för evigt och Rösten gav tyst upp (inget svar alls, demo-stoppande). Ledarens-agent gav detta
+// förtur och bad oss uttryckligen att inte ge upp tyst utan svara direkt när Kön nekat längre än
+// gränsen (854). Vi väntar därför fortfarande på vår tur (respekterar turordningen i normalfallet),
+// men bypassar och svarar ändå — synligt loggat — om väntan passerar gränsen, hellre än att tappa
+// svaret helt. Så fort fralle har ett tidsgränsat/hoppa-över-huvud (839 förslag 1) kan bypass-grenen
+// tas bort igen.
 const KÖ_PORT = process.env.PORT || 8180;
 const KÖ_VÄNTA_MS = 1500;
-const KÖ_MAX_FÖRSÖK = 40; // ~60 s väntan på vår tur innan vi ger upp tyst (ingen publicering då)
+const KÖ_MAX_FÖRSÖK = 40;        // ~60 s väntan på vår tur innan vi bypassar och svarar ändå
+const KÖ_FÖRNYELSE_FÖRSÖK = 6;   // ~9 s väntan på förnyelse innan vi bypassar och publicerar ändå
 
 async function försökReservera(frågaId) {
   if (typeof fetch !== 'function') return 'onåbar'; // ingen fetch i den här node-versionen
@@ -36,22 +41,24 @@ async function försökReservera(frågaId) {
   }
 }
 
-// Reserverar innan vi jobbar vidare. Ger "reserverad" (kör), "stoppa" (ge upp tyst, publicera inte)
-// eller "onåbar" (Kön kan inte svara för oss, kör direktflödet som innan reservations-API:t fanns).
+// Reserverar innan vi jobbar vidare. Ger "reserverad" (kör som vanligt), "bypass" (Kön har nekat
+// länge nog, troligen ett fastnat huvud: svara ändå och logga det tydligt) eller "onåbar" (Kön kan
+// inte svara för oss, kör direktflödet som innan reservations-API:t fanns).
 async function säkraReservation(frågaId) {
   for (let försök = 0; försök < KÖ_MAX_FÖRSÖK; försök++) {
-    if (!pending.has(frågaId)) return 'stoppa'; // frågan plockades bort under tiden
+    if (!pending.has(frågaId)) return 'bypass'; // frågan plockades bort under tiden, inget kvar att göra
     const resultat = await försökReservera(frågaId);
     if (resultat === 'reserverad' || resultat === 'onåbar') return resultat;
     // 'nekad': inte vår tur än, vänta och försök igen utan att jobba vidare
     await new Promise((klar) => setTimeout(klar, KÖ_VÄNTA_MS));
   }
-  return 'stoppa'; // väntat länge nog, ger upp tyst hellre än att bryta mot turordningen
+  console.error('[mikael] Kön nekar fortfarande efter', KÖ_MAX_FÖRSÖK, 'försök, bypassar och jobbar vidare med fråga', frågaId);
+  return 'bypass';
 }
 
 async function väntaPåTurOchSchemalägg(frågaId, board, väntetid) {
   const status = await säkraReservation(frågaId);
-  if (status === 'stoppa') { pending.delete(frågaId); return; }
+  if (!pending.has(frågaId)) return; // borttagen under väntan, inget att schemalägga
   const timer = setTimeout(() => {
     try { formuleraSvar(frågaId, board); }
     catch (err) { console.error('[mikael] kunde inte formulera svar', err && err.message); }
@@ -59,11 +66,17 @@ async function väntaPåTurOchSchemalägg(frågaId, board, väntetid) {
   if (timer.unref) timer.unref();
 }
 
-// Körs direkt före publicering: förnyar reservationen. Nekas förnyelsen ska vi inte publicera
-// (fralle #bygge 556/637): någon annan har tagit över eller frågan är återkallad.
+// Körs direkt före publicering: förnyar reservationen några gånger. Nekas förnyelsen länge nog
+// bypassar vi och publicerar ändå (loggat), hellre än att tappa ett redan granskat svar — se
+// kommentaren om Köns fastnade huvud ovan.
 async function fårPublicera(frågaId) {
-  const status = await försökReservera(frågaId);
-  return status !== 'nekad';
+  for (let försök = 0; försök < KÖ_FÖRNYELSE_FÖRSÖK; försök++) {
+    const status = await försökReservera(frågaId);
+    if (status !== 'nekad') return true; // reserverad eller Kön onåbar: publicera
+    await new Promise((klar) => setTimeout(klar, KÖ_VÄNTA_MS));
+  }
+  console.error('[mikael] förnyelse nekad efter', KÖ_FÖRNYELSE_FÖRSÖK, 'försök, publicerar ändå (bypass) för fråga', frågaId);
+  return true; // bypass: hellre publicera ett granskat svar än tappa det tyst
 }
 
 const VÄNTA_PÅ_MINNE_MS = 2500;

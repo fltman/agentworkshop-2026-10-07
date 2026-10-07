@@ -93,8 +93,27 @@ mellan hämtningarna. Efter snapshot-tiden är området okänt tills nästa
 hämtning. Vid fel behålls gammalt underlag med varning. Efter 15 sekunder
 markeras det inaktuellt. Dold sida pausar animering och hämtning;
 reducerad rörelse innebär endast uppdatering vid hämtning.
+Hämtningsfelets orsak och åldern på senaste lyckade hämtning visas även
+under animation. Statusen återgår till ansluten först efter en lyckad hämtning.
 
 Risker: regler missar nyanser; mycket trafik kan begränsa historiken;
 smala rutor kan ge täta symboler. Detaljerna bevarar källorna.
 Kontroller omfattar exakt tidsplacering, skala, grupper, täckningsluckor,
 sortering, säkra texter, minnestak och verklig serverintegration.
+
+## Animationer och ”Ohh yeah”
+
+Endast frontend; backend och `stämning.byte` är oförändrade.
+- Nya markörer, jämfört med förra lyckade hämtningen, poppar in (cirka 300 ms).
+  Första hämtningen sätter bara baslinjen och animerar inget.
+- Kanalens högsta vågtopp i fönstret pulserar med en glöd.
+- Nya ❤️-markörer (omtanke) ger ett svävande hjärta i kanalens ruta.
+- Röst via webbläsarens talsyntes (Web Speech API): ”Ohh yeah” när nya
+  markörer för uppskattning eller omtanke dyker upp. Avstängd tills användaren
+  klickar 🔊 (webbläsare blockerar ljud utan klick, och rutan är gemensam),
+  högst en gång per 30 sekunder. Saknas talsyntes inaktiveras knappen.
+- Reducerad rörelse stänger av alla animationer men inte den valda rösten.
+
+Beslut: talsyntes framför ljudfil (ingen tillgång att distribuera eller
+licensiera); utlösning på nya markörer framför räknarökning, eftersom antalet
+i fönstret också minskar när gamla markörer rullar ut.
