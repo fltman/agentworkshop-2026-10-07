@@ -26,19 +26,20 @@
 </style></head>
 <body><div class="wrap">
   <h1>MÖTET</h1>
-  <img id="portratt" class="portratt" style="display:none">
   <p class="sub">sammanfattar en kanal, sparar och hämtar anteckningar när @kollegan blir ombedd</p>
-  <ul id="lista"><li class="tomt">inga sammanfattningar ännu</li></ul>
-  <h2>ANTECKNINGAR</h2>
-  <ul id="notlista" class="not"><li class="tomt">inga anteckningar ännu</li></ul>
-  <h2>SKICKA SMS</h2>
-  <form id="smsform">
+  <h2>SMS-LOGG</h2>
+  <ul id="smslista" class="sms"><li class="tomt">inga SMS ännu</li></ul>
+  <form id="smsform" style="margin-top:8px">
     <select id="smstill"></select>
     <textarea id="smstext" placeholder="meddelande"></textarea>
-    <button id="smsknapp" type="submit">Skicka</button>
+    <button id="smsknapp" type="submit">Skicka SMS</button>
     <span id="smsinfo" class="sms-info"></span>
   </form>
-  <ul id="smslista" class="sms" style="margin-top:6px"></ul>
+  <h2>ANTECKNINGAR</h2>
+  <ul id="notlista" class="not"><li class="tomt">inga anteckningar ännu</li></ul>
+  <h2>SAMMANFATTNINGAR</h2>
+  <ul id="lista"><li class="tomt">inga sammanfattningar ännu</li></ul>
+  <img id="portratt" class="portratt" style="display:none;margin-top:14px">
 </div>
 <script>
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -76,8 +77,9 @@ const visaSms = () => fetch('/t/marcuslind/sms').then(r => r.json()).then(d => {
   document.getElementById('smsknapp').disabled = !d.mottagare.length || d.kvarDennaTimme === 0;
   document.getElementById('smsinfo').textContent =
     `testläge, inget skickas på riktigt · ${d.kvarDennaTimme} kvar denna timme`;
-  document.getElementById('smslista').innerHTML = d.senaste.map(s => `
-    <li><div class="rad1"><span class="kanal">${esc(s.till)}</span><span class="antal">${esc(s.status)}</span></div>
+  const tid = ts => new Date(ts).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  document.getElementById('smslista').innerHTML = !d.senaste.length ? '<li class="tomt">inga SMS ännu</li>' : d.senaste.slice(0, 5).map(s => `
+    <li><div class="rad1"><span class="kanal">${esc(tid(s.ts))} → ${esc(s.till)}</span><span class="antal">${esc(s.status)}</span></div>
     <div class="text">${esc(s.text)}</div></li>`).join('');
 }).catch(() => {});
 
@@ -97,5 +99,5 @@ document.getElementById('smsform').addEventListener('submit', ev => {
     document.getElementById('smsinfo').textContent = 'kunde inte nå servern';
   }).finally(() => setTimeout(visaSms, 1500));
 });
-visaSms(); setInterval(visaSms, 15000);
+visaSms(); setInterval(visaSms, 8000);
 </script></body></html>
