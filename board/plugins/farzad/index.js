@@ -1,7 +1,8 @@
 // Nyfikenheten (team farzad): när det är tyst i frågeflödet ställer Kollegan själv en fråga,
 // byggd på något en annan förmåga just sett. Reagerar på andra kvarters händelser, aldrig på en tom timer.
 //
-//   lyssnar på  puls.*, stämning.*, kunskap.*, minne.*, och första händelsen från varje nytt kvarter
+//   lyssnar på  puls.*, stämning.*, kunskap.*, minne.*, och första händelsen från varje nytt kvarter,
+//               men bara händelser utan orsak (kedjans början)
 //   skickar     nyfikenhet.fråga {fråga, kvarter, typ, inlägg, kanal}  med orsak = händelsen som väckte frågan
 //   postar      "@kollegan <fråga>" på Torget, så Örat tar den vidare genom kedjan
 //
@@ -57,7 +58,7 @@ function spara() {
 }
 
 function basta(nu) {
-  st.kandidater = st.kandidater.filter(c => nu - c.ts < KANDIDAT_MAX_ALDER_MS && c.djup < 4);
+  st.kandidater = st.kandidater.filter(c => nu - c.ts < KANDIDAT_MAX_ALDER_MS);
   if (!st.kandidater.length) return null;
   // nya kvarter först, sedan starkast, sedan nyast
   return [...st.kandidater].sort((a, b) => (b.nytt - a.nytt) || ((b.styrka ?? 50) - (a.styrka ?? 50)) || (b.ts - a.ts))[0];
@@ -120,9 +121,12 @@ module.exports = {
 
   onEvent(e, { team, board }) {
     if (e.kvarter === team || !e.typ) return;
+    // Bara händelser som startar en kedja: svar på frågor (minne.träff, puls.tryck ...) skulle få Kollegan
+    // att undra över sina egna frågor.
+    if (e.orsak) return;
     const nytt = !st.settKvarter.has(e.kvarter);
     st.settKvarter.add(e.kvarter);
-    if ((!nytt && !INTRESSANT.test(e.typ)) || e.djup >= 4) return;
+    if (!nytt && !INTRESSANT.test(e.typ)) return;
     st.kandidater.push({ ...e, nytt: nytt ? 1 : 0 });
     st.kandidater = st.kandidater.slice(-30);
     fraga(board);
