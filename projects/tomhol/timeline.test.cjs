@@ -205,7 +205,7 @@ test('diff finds new appreciation/care markers after the baseline and cheer resp
   assert.equal(graph.shouldCheer(voice, 30000, 2), true);
 });
 
-test('tile pops new emojis, pulses the peak, floats hearts and says Ohh yeah only after opt-in', async () => {
+test('tile pops new emojis, pulses the peak, floats hearts and says the cheer only after opt-in', async () => {
   const now = 1800000000000;
   const containers = { timelines: element('section'), 'timeline-status': element('p'), sound: element('button') };
   containers.sound.addEventListener = (event, cb) => { containers.sound.click = cb; };
@@ -213,6 +213,7 @@ test('tile pops new emojis, pulses the peak, floats hearts and says Ohh yeah onl
   let scheduled, clock = 1000;
   const motion = { matches: false, addEventListener(event, cb) { listeners.motion = cb; } };
   const spoken = [];
+  let cancels = 0;
   let markorer = [{ ts: now - 5000, inlagg: 1, signal: 'fragor', uttryck: 'why' }];
   const payload = () => ({
     till: now, fran: now - 600000, tackningFran: now - 600000, intervallMs: 10000, maxSkala: 10,
@@ -226,7 +227,7 @@ test('tile pops new emojis, pulses the peak, floats hearts and says Ohh yeah onl
     },
     window: {
       matchMedia: () => motion,
-      speechSynthesis: { speak: u => spoken.push(u) },
+      speechSynthesis: { speak: u => spoken.push(u), cancel() { cancels++; } },
       SpeechSynthesisUtterance: function (text) { this.text = text; },
     },
     performance: { now: () => clock },
@@ -252,20 +253,25 @@ test('tile pops new emojis, pulses the peak, floats hearts and says Ohh yeah onl
 
   containers.sound.click();
   assert.equal(containers.sound.attributes['aria-pressed'], 'true');
+  assert.deepEqual(spoken.map(u => u.text), ['Bra jobbat, gubbar!'], 'speaks inside the click gesture to unlock speech');
+  spoken[0].onerror({ error: 'not-allowed' });
+  assert.match(containers.sound.textContent, /talsyntesfel: not-allowed/);
+  spoken.length = 0;
   markorer = [...markorer, { ts: now, inlagg: 3, signal: 'uppskattning', uttryck: 'tack' }];
-  clock = 2000;
+  clock = 31000;
   await scheduled();
-  assert.deepEqual(spoken.map(u => u.text), ['Ohh yeah']);
+  assert.deepEqual(spoken.map(u => u.text), ['Bra jobbat, gubbar!']);
+  assert.ok(cancels >= 2, 'clears a stuck queue before speaking');
   assert.equal(article().children.some(c => c.attributes.class === 'float-heart'), false);
 
   markorer = [...markorer, { ts: now, inlagg: 4, signal: 'omtanke', uttryck: '❤️' }];
-  clock = 31999;
+  clock = 60999;
   await scheduled();
   assert.equal(spoken.length, 1, 'cooldown holds');
 
   motion.matches = true;
   markorer = [...markorer, { ts: now, inlagg: 5, signal: 'omtanke', uttryck: '❤️' }];
-  clock = 32000;
+  clock = 61000;
   await scheduled();
   assert.equal(spoken.length, 2, 'voice still works with reduced motion');
   assert.equal(texts().some(t => t.attributes.class === 'pop'), false);
@@ -273,7 +279,19 @@ test('tile pops new emojis, pulses the peak, floats hearts and says Ohh yeah onl
 
   containers.sound.click();
   markorer = [...markorer, { ts: now, inlagg: 6, signal: 'omtanke', uttryck: '❤️' }];
-  clock = 70000;
+  clock = 100000;
   await scheduled();
   assert.equal(spoken.length, 2, 'silent after opt-out');
+});
+
+test('pickVoice prefers known female Swedish voices with a raised pitch', () => {
+  const alva = { name: 'Alva', lang: 'sv-SE' };
+  const hedvig = { name: 'Microsoft Hedvig - Swedish (Sweden)', lang: 'sv-SE' };
+  const oskar = { name: 'Oskar', lang: 'sv-SE' };
+  const en = { name: 'Samantha', lang: 'en-US' };
+  assert.deepEqual(graph.pickVoice([en, oskar, alva]), { voice: alva, pitch: 1.6 });
+  assert.deepEqual(graph.pickVoice([oskar, hedvig]), { voice: hedvig, pitch: 1.6 });
+  assert.deepEqual(graph.pickVoice([en, oskar]), { voice: oskar, pitch: 1.6 });
+  assert.deepEqual(graph.pickVoice([en]), { voice: null, pitch: 1.6 });
+  assert.equal(graph.phrase, 'Bra jobbat, gubbar!');
 });

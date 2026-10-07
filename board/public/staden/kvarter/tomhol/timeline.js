@@ -57,6 +57,16 @@ const Timeline = (() => {
     return true;
   }
 
+  const phrase = 'Bra jobbat, gubbar!';
+  const femaleSwedish = /\b(alva|klara|hedvig|sofie)\b/i;
+  // Web Speech exposes no voice gender, so known female Swedish voices are picked by name,
+  // and the pitch is raised for a light voice.
+  function pickVoice(voices) {
+    const swedish = voices.filter(v => /^sv/i.test(v.lang));
+    const voice = swedish.find(v => femaleSwedish.test(v.name)) || swedish[0] || null;
+    return { voice, pitch: 1.6 };
+  }
+
   function svgElement(tag, attributes = {}, text) {
     const element = document.createElementNS('http://www.w3.org/2000/svg', tag);
     for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
@@ -134,7 +144,7 @@ const Timeline = (() => {
       container.append(article);
     }
   }
-  return { geometry, height, x, render, diff, shouldCheer, markerKey, cooldownMs };
+  return { geometry, height, x, render, diff, shouldCheer, markerKey, cooldownMs, pickVoice, phrase };
 })();
 
 if (typeof module !== 'undefined') module.exports = Timeline;
@@ -158,15 +168,30 @@ if (typeof document !== 'undefined') {
       sound.addEventListener('click', () => {
         voice.enabled = !voice.enabled;
         sound.setAttribute('aria-pressed', String(voice.enabled));
-        sound.textContent = voice.enabled ? '🔊 ”Ohh yeah” på' : '🔇 ”Ohh yeah” av';
+        sound.textContent = voice.enabled ? '🔊 ”Bra jobbat, gubbar!” på' : '🔇 ”Bra jobbat, gubbar!” av';
+        // Browsers only allow speech that is first started inside a user gesture.
+        if (voice.enabled) {
+          voice.lastAt = performance.now();
+          cheer();
+        } else {
+          window.speechSynthesis.cancel();
+        }
       });
     }
   }
+  let utterance = null;
   function cheer() {
-    const utterance = new window.SpeechSynthesisUtterance('Ohh yeah');
-    utterance.lang = 'en-US';
-    utterance.rate = 0.9;
-    utterance.pitch = 0.8;
+    // Keep a reference: Chrome can garbage-collect an unreferenced utterance before it plays.
+    utterance = new window.SpeechSynthesisUtterance(Timeline.phrase);
+    const { voice, pitch } = Timeline.pickVoice(window.speechSynthesis.getVoices ? window.speechSynthesis.getVoices() : []);
+    if (voice) utterance.voice = voice;
+    utterance.lang = voice ? voice.lang : 'sv-SE';
+    utterance.rate = 0.95;
+    utterance.pitch = pitch;
+    utterance.onerror = event => {
+      if (sound) sound.textContent = `🔊 ”Bra jobbat, gubbar!” på – talsyntesfel: ${event.error || 'okänt'}`;
+    };
+    window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
   }
 
