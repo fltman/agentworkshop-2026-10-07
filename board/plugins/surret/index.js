@@ -8,6 +8,7 @@
 //
 //   GET /t/surret/fragor   → senaste frågorna med sina kedjor
 //   GET /t/surret/status   → siffror
+//   GET /t/surret/report-data?from=MS&to=MS → Rapportörens format (fralle), inflödet av frågor
 
 const BUSS = 'kollegan-events';
 const MAX_FRAGOR = 60;
@@ -26,6 +27,8 @@ const st = {
   svarsposter: new Set(), // kvarter som skickat svar.*: deras trådsvar på Torget hörs inte som frågor
   hört: 0,
   dubbletter: 0,
+  start: Date.now(),
+  kvarter: new Set(),     // alla som skickat händelser: deras frågor räknas som audience=agent
   portratt: null,         // ateljens bild.klar till surret: {url, prompt, ts}
   timer: null,
 };
@@ -134,6 +137,7 @@ function harArbete() {
 }
 
 function las(e, team) {
+  if (e.kvarter) st.kvarter.add(e.kvarter);
   // Alla svar.* räknas, även svar.utkast: Rösten skickar det innan svaret postas på Torget.
   if (/^svar\./.test(e.typ) && e.kvarter !== team) st.svarsposter.add(e.kvarter);
   const n = e.nyttolast && typeof e.nyttolast === 'object' ? e.nyttolast : {};
@@ -164,6 +168,59 @@ function json(res, code, data) {
   res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(data));
   return true;
+}
+
+function besvaradVid(f) {
+  const k = f.kedja.find(x => x.typ === 'svar.klart') || f.kedja.find(x => SVAR_TYPER.test(x.typ));
+  return k ? k.ts : null;
+}
+
+// Rapportörens format (fralle, #bygge 677): bara det Örat själv observerat, saknat = null.
+function rapport(url, team) {
+  const from = Number(url.searchParams.get('from'));
+  const to = Number(url.searchParams.get('to'));
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return null;
+  const iPeriod = st.fragor.filter(f => f.ts >= from && f.ts < to);
+  const minnetFran = st.fragor.length ? Math.min(st.fragor[0].ts, st.start) : st.start;
+  const komplett = from >= minnetFran && st.fragor.length < MAX_FRAGOR;
+  const records = iPeriod.map(f => ({
+    question_id: f.händelse || null,
+    received_at: f.ts,
+    answered_at: besvaradVid(f),
+    cancelled_at: null,
+    audience: st.kvarter.has(f.frågare) ? 'agent' : 'unknown',
+    useful: null,
+    saved_minutes: null,
+    inlägg: f.inlägg, kanal: f.kanal, frågare: f.frågare, språk: f.språk || null,
+    följdfråga_till: f.följdTill || null, dubblett_av: f.dubblettAv || null,
+    flaggad_obesvarad: !!(f.obesvarad && f.obesvarad > 0),
+  }));
+  const tider = records.filter(r => r.answered_at).map(r => r.answered_at - r.received_at).sort((a, b) => a - b);
+  const m = (key, label, value, unit, scope) => ({ key, label, value, unit, scope });
+  const n = pred => iPeriod.filter(pred).length;
+  return {
+    schema_version: 1, team, capability: 'Örat', generated_at: Date.now(),
+    period: { from, to },
+    coverage: {
+      from: minnetFran, to: Date.now(), complete: komplett,
+      note: `Örat minns de senaste ${MAX_FRAGOR} frågorna och läser om dem från bussen (senaste 1000 händelserna) vid omstart. `
+        + 'Dubbletter syns bara sedan senaste omstart: de skickas aldrig på bussen. audience=agent betyder att frågaren också skickat händelser.',
+    },
+    metrics: [
+      m('questions_heard', 'Hörda frågor till @kollegan', iPeriod.length, 'count', 'period'),
+      m('questions_sent', 'Skickade som fråga.ny', n(f => f.händelse), 'count', 'period'),
+      m('questions_answered', 'Besvarade (svar.* i kedjan)', n(f => f.besvarad), 'count', 'period'),
+      m('questions_flagged_unanswered', 'fråga.obesvarad efter 3 min', n(f => f.obesvarad && f.obesvarad > 0), 'count', 'period'),
+      m('duplicates', 'Dubbletter med hänvisning', n(f => f.dubblettAv), 'count', 'period'),
+      m('follow_ups', 'Följdfrågor', n(f => f.följdTill), 'count', 'period'),
+      m('lang_sv', 'Frågor på svenska', n(f => f.språk === 'sv'), 'count', 'period'),
+      m('lang_en', 'Frågor på engelska', n(f => f.språk === 'en'), 'count', 'period'),
+      m('median_time_to_answer', 'Median tid till svar', tider.length ? tider[Math.floor(tider.length / 2)] : null, 'ms', 'period'),
+      m('queued_now', 'I kö under bussens takt', st.ko.length, 'count', 'snapshot'),
+      m('questions_retained', 'Frågor i minnet', st.fragor.length, 'count', 'retained'),
+    ],
+    records,
+  };
 }
 
 module.exports = {
@@ -203,8 +260,12 @@ module.exports = {
 
   onEvent(e, { team }) { las(e, team); },
 
-  async handle(req, res, { path }) {
+  async handle(req, res, { path, url, team }) {
     if (req.method !== 'GET') return false;
+    if (path === '/report-data') {
+      const r = rapport(url, team);
+      return r ? json(res, 200, r) : json(res, 400, { error: 'from och to krävs, epoch ms, from < to' });
+    }
     if (path === '/fragor') {
       return json(res, 200, st.fragor.slice(-25).reverse().map(f => ({
         inlägg: f.inlägg, kanal: f.kanal, frågare: f.frågare, fråga: f.fråga, styrka: f.styrka, ts: f.ts,
