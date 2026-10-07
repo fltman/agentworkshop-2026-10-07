@@ -62,6 +62,7 @@ const API = '/t/team-martin/puls';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 const klockan = (ts) => new Date(ts).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+const tal = (n) => String(n == null ? '' : n).replace('.', ',');   // svensk decimal i text
 
 function farg(s) { return s >= 70 ? '#ff6b6b' : s >= 40 ? '#ffb454' : '#5ec8d8'; }
 
@@ -119,7 +120,7 @@ function rita(d) {
   const ton = d.stämning && d.stämning.nyttolast
     ? ' · ton: ' + esc(d.stämning.nyttolast.ton || d.stämning.nyttolast.stämning || d.stämning.styrka)
     : '';
-  $('sub').innerHTML = esc(n.mpm) + ' inlägg/min · ' + esc(n.inlägg) + ' på ' + esc(n.fönster_min) + ' min<br>'
+  $('sub').innerHTML = esc(tal(n.mpm)) + ' inlägg/min · ' + esc(n.inlägg) + ' på ' + esc(n.fönster_min) + ' min<br>'
     + 'tempo ' + esc(n.tempo) + ' · tryck ' + esc(n.tryck) + ton;
 
   ritaKurva(d.historik, n.styrka || 0);

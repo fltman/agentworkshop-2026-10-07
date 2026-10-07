@@ -59,7 +59,7 @@ function stadaFonster(t = nu()) {
   for (const [id, f] of st.fragor) {
     if (f.besvarad || t - f.ts > GLOM_FRAGA_MS) st.fragor.delete(id);
   }
-  if (st.sedda.size > 500) st.sedda.clear();
+  if (st.sedda.size > 500) st.sedda = new Set([...st.sedda].slice(-250));
 }
 
 function obesvarade(t = nu()) {
@@ -97,7 +97,7 @@ function mat(t = nu()) {
     inlägg: st.msgs.length,
     fönster_min: minuter,
     hetaste: kanaler[0] ? kanaler[0].kanal : null,
-    kanaler: kanaler.slice(0, 8),
+    kanaler,                      // hel lista internt, kapas först när den skickas ut
     obesvarade: vantande,
     stämning: st.stamning,
   };
@@ -112,16 +112,28 @@ function ord(s) {
 }
 
 // En färdig mening om rummet, så Rösten kan citera Pulsen utan att tolka våra siffror.
-function rad(m) {
+// JSON-fälten är tal, men meningen är svenska: decimalkomma, inte punkt.
+const tal = (n) => String(n).replace('.', ',');
+const tillMinuter = (s) => Math.max(1, Math.round(s / 60));
+
+function rad(m, kanal) {
   const delar = [];
-  if (m.hetaste) delar.push(`${ord(m.styrka)} i #${m.hetaste}`);
-  else delar.push(`det är ${ord(m.styrka)} i rummet`);
-  delar.push(`${m.mpm} inlägg i minuten`);
+  // Gäller raden en viss fråga nämner vi den kanalen, inte rummets hetaste: annars citerar
+  // Rösten "stilla i #torget" om en fråga som ställdes i #hjälp.
+  const k = kanal && m.kanaler.find((x) => x.kanal === kanal);
+  if (k) delar.push(`${ord(k.styrka)} i #${k.kanal}`);
+  else if (kanal) delar.push(`tyst i #${kanal}`);
+  else delar.push(m.hetaste ? `${ord(m.styrka)} i #${m.hetaste}` : `det är ${ord(m.styrka)} i rummet`);
+
+  delar.push(`${tal(m.mpm)} inlägg i minuten i rummet`);
+  if (kanal && m.hetaste && m.hetaste !== kanal) delar.push(`mest just nu i #${m.hetaste}`);
+
   if (m.obesvarade.length) {
-    const v = m.obesvarade[0];
+    const min = tillMinuter(m.obesvarade[0].vantat_s);
+    const tid = `${min} minut${min === 1 ? '' : 'er'}`;
     delar.push(m.obesvarade.length === 1
-      ? `en fråga har väntat ${Math.round(v.vantat_s / 60) || 1} minut${Math.round(v.vantat_s / 60) > 1 ? 'er' : ''} på svar`
-      : `${m.obesvarade.length} frågor väntar på svar, den äldsta i ${Math.round(v.vantat_s / 60) || 1} minuter`);
+      ? `en fråga har väntat ${tid} på svar`
+      : `${m.obesvarade.length} frågor väntar på svar, den äldsta i ${tid}`);
   }
   return delar.join(', ') + '.';
 }
@@ -233,15 +245,16 @@ module.exports = {
         if (st.sedda.has(e.id)) return;
         st.sedda.add(e.id);
         const m = mat();
+        const kanal = (e.nyttolast && e.nyttolast.kanal) || null;
         const h = emit(board, 'puls.tryck', {
           styrka: m.styrka,
           orsak: e.id,
           nyttolast: {
             ord: ord(m.styrka),
-            rad: rad(m),
+            rad: rad(m, kanal),
             mpm: m.mpm,
             hetaste: m.hetaste,
-            kanal: (e.nyttolast && e.nyttolast.kanal) || null,
+            kanal,
             köar: m.obesvarade.length,
             råd: m.styrka >= 55 ? 'kort svar, det är full fart' : 'det finns tid för ett utförligt svar',
           },
@@ -289,7 +302,7 @@ module.exports = {
         förmåga: 'Pulsen',
         rad: rad(m),
         nu: { styrka: m.styrka, ord: ord(m.styrka), tempo: m.tempo, tryck: m.tryck, mpm: m.mpm, inlägg: m.inlägg, hetaste: m.hetaste, fönster_min: m.fönster_min },
-        kanaler: m.kanaler,
+        kanaler: m.kanaler.slice(0, 8),
         obesvarade: m.obesvarade,
         historik: st.historik.slice(-90),
         reaktioner: st.reaktioner.slice(-6).reverse(),

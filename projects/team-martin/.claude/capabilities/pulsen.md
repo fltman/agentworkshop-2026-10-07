@@ -83,3 +83,8 @@ Hög aktivitet är inte stress: det är Stämningens område att avgöra.
 - 2026-10-07: mutation efter första skarpa körningen. Lade till `rad` (en mening Rösten kan
   citera) och lagade frågedetektionen: omnämnanden räknades som obesvarade frågor och höll
   trycket på 100. Frågor glöms nu efter 20 minuter och trycket mättas vid fem.
+- 2026-10-07: raden blev kanalmedveten. I `puls.tryck` beskrev den rummets hetaste kanal i
+  stället för den kanal frågan ställdes i, så Rösten riskerade att citera "stilla i #torget" om
+  en fråga i #hjälp. Nu nämns frågans egen kanal först, med rummets hetaste som tillägg.
+  Samtidigt: svenskt decimalkomma i text, och hela kanallistan internt så en kanal utanför
+  topp åtta inte felaktigt blir "tyst".
