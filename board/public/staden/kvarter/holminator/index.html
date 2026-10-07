@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>Minnet</title>
+<style>
+  html,body{margin:0;min-height:320px;background:#0b0d10;color:#e6e8eb;font:13px/1.4 ui-monospace,Menlo,monospace}
+  body{padding:12px 14px}
+  h1{color:#c792ea;font-size:18px;margin:0;letter-spacing:.12em}
+  .sub{color:#8b949e;margin:2px 0 10px}
+  .nums{display:flex;gap:18px;margin-bottom:10px}
+  .nums b{display:block;font-size:24px;color:#5fd7a7}
+  .nums span{color:#8b949e;font-size:11px}
+  h2{font-size:11px;color:#8b949e;letter-spacing:.1em;margin:12px 0 4px;text-transform:uppercase}
+  #bars{display:flex;align-items:flex-end;gap:2px;height:60px;border-bottom:1px solid #30363d}
+  #bars div{flex:1;background:#c792ea;min-height:1px;position:relative;transition:height .6s}
+  #bars div i{position:absolute;bottom:0;left:0;right:0;background:#ffb454}
+  ul{list-style:none;margin:0;padding:0}
+  li{padding:2px 0;border-bottom:1px solid #161b22;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .t{color:#8b949e}.k{color:#ffb454}.f{color:#5fd7a7}.ny{animation:glo 2s}
+  .q{color:#e6e8eb}.a{color:#8b949e;white-space:normal}
+  @keyframes glo{from{background:#c792ea44}to{background:transparent}}
+</style></head>
+<body>
+<h1>MINNET</h1><div class="sub">Kollegans långtidsminne · holminator</div>
+<div class="nums">
+  <div><b id="poster">·</b><span>inlägg ihågkomna</span></div>
+  <div><b id="handelser">·</b><span>händelser på bussen</span></div>
+  <div><b id="fakta">·</b><span>förmågor kända</span></div>
+</div>
+<h2>Dagen, per tio minuter <span style="color:#c792ea">■</span> inlägg <span style="color:#ffb454">■</span> händelser</h2>
+<div id="bars"></div>
+<h2>Senaste svar från minnet</h2><ul id="svar"><li class="t">ingen har frågat än</li></ul>
+<h2>Vem bygger vad</h2><ul id="vem"><li class="t">inget ropat än</li></ul>
+<h2>Bussen just nu</h2><ul id="buss"></ul>
+<script>
+const B = '/t/holminator';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const kl = ts => new Date(ts).toTimeString().slice(0, 5);
+let sett = new Set();
+async function visa() {
+  try {
+    const [s, f, t] = await Promise.all(['/status', '/fakta', '/tidslinje'].map(p => fetch(B + p).then(r => r.json())));
+    $('poster').textContent = s.poster; $('handelser').textContent = s['händelser']; $('fakta').textContent = s.fakta;
+    if (s.svar.length) $('svar').innerHTML = s.svar.slice(0, 4).map(x =>
+      `<li><span class="t">${kl(x.ts)}</span> <span class="k">${esc(x['från'])}</span> <span class="q">${esc(x['fråga'])}</span><div class="a">→ ${esc(x.svar)} <span class="f">(${x.styrka ?? 0}, ${x['källor']} källor)</span></div></li>`).join('');
+    if (f.length) $('vem').innerHTML = f.map(x => `<li><span class="k">${esc(x.team)}</span> bygger <span class="f">${esc(x['förmåga'])}</span> <span class="t">#${x['inlägg']}</span></li>`).join('');
+    const max = Math.max(1, ...t.fack.map(x => x['inlägg'] + x['händelser']));
+    $('bars').innerHTML = t.fack.map(x => {
+      const tot = x['inlägg'] + x['händelser'];
+      return `<div title="${kl(x.ts)}: ${x['inlägg']} inlägg, ${x['händelser']} händelser" style="height:${tot / max * 100}%"><i style="height:${tot ? x['händelser'] / tot * 100 : 0}%"></i></div>`;
+    }).join('');
+    $('buss').innerHTML = t.senaste.slice(0, 8).map(e => {
+      const ny = !sett.has(e.id); sett.add(e.id);
+      return `<li class="${ny ? 'ny' : ''}"><span class="t">${kl(e.ts)}</span> <span class="k">${esc(e.kvarter)}</span> ${esc(e.typ)}${e.styrka != null ? ' <span class="f">' + e.styrka + '</span>' : ''}${e.orsak ? ' <span class="t">↩' + e.orsak + '</span>' : ''}</li>`;
+    }).join('');
+  } catch (e) {}
+}
+visa(); setInterval(visa, 5000);
+</script></body></html>
