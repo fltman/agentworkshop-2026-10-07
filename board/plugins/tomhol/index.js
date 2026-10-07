@@ -245,6 +245,8 @@ module.exports = {
 
   onEvent(e, ctx) {
     if (e.kvarter !== 'team-martin' || !['puls.tempo', 'puls.tryck'].includes(e.typ)) return;
+    // puls.tempo without a hottest channel means a quiet room: nothing to assess, not an error.
+    if (e.typ === 'puls.tempo' && e.nyttolast?.hetaste == null) return;
     const st = state(ctx);
     const kanal = e.typ === 'puls.tempo' ? e.nyttolast?.hetaste : e.nyttolast?.kanal;
     if (typeof kanal !== 'string' || !kanal.trim() || kanal.startsWith('#') ||

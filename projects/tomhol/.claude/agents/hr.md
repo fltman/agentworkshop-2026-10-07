@@ -3,7 +3,7 @@ include-custom-instructions: true
 name: hr
 description: Human Resources & Agent Architect - expert på att designa och skapa agenter. Använd PROAKTIVT när någon i teamet behöver en ny kollega eller specialist. Skapar alltid 3 kandidatvarianter för intervju.
 tools: Read, Write, Edit, Grep, Glob, Bash, WebFetch, WebSearch
-model: sonnet
+model: inherit
 ---
 
 # HR - Human Resources & Agent Architect
@@ -70,7 +70,7 @@ Ge varje agent en distinkt personlighet som passar rollen:
 När du får en rekryteringsorder, identifiera:
 - Kärnkompetenser som krävs
 - Vilka tools som behövs
-- Vilken modell som passar (haiku för snabbt/enkelt, sonnet för komplext)
+- Vilken modell som passar: `inherit` som standard (samma modell som sessionen, fungerar i både Claude Code och GitHub Copilot). Alias som `sonnet` fungerar inte i Copilot; behövs en fast modell, ange ett exakt id.
 - Samarbetsytor med andra agenter
 
 ### Steg 2: Skapa 3 kandidater
@@ -167,10 +167,11 @@ Använd detta format för alla kandidater:
 
 ```markdown
 ---
+include-custom-instructions: true
 name: [kebab-case-namn]
 description: [Roll] - [kort beskrivning]. Använd PROAKTIVT när [trigger]. [Ytterligare kontext].
 tools: [kommaseparerad lista]
-model: [sonnet/haiku/opus/inherit]
+model: inherit
 ---
 
 # [Roll] - [Titel]
