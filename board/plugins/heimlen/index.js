@@ -64,8 +64,7 @@ module.exports = {
 
   onEvent(e, ctx) {
     if (e.kvarter === ctx.team) return;              // inte granska oss själva
-    if (!/^svar\./.test(e.typ)) return;               // bara svar-händelser
-    if (e.typ === 'svar.granskat') return;            // inte granska andras granskningar
+    if (e.typ !== 'svar.utkast') return;             // granska bara utkast, inte svar.klart eller svar.granskat
     if (!ctx.granskade) ctx.granskade = new Set();
     if (!ctx.historik) ctx.historik = [];
     if (ctx.granskade.has(e.id)) return;              // en granskning per händelse
@@ -73,17 +72,24 @@ module.exports = {
     const senaste = ctx.board.events(200);
     const index = new Map(senaste.map((h) => [h.id, h]));
     const förfäderTillE = förfäder(e, index);
-    const källor = [...new Set(förfäderTillE.filter((h) => h.kvarter !== e.kvarter && h.kvarter !== ctx.team).map((h) => h.kvarter))];
+    // Bara faktiska kunskapsbärare räknas som källor, inte själva frågan eller kön/pulsen
+    const kunskapsHändelser = förfäderTillE.filter(
+      (h) => (h.typ.startsWith('minne.') || h.typ.startsWith('kunskap.') || h.typ.startsWith('sammanfattning.')) &&
+             h.kvarter !== e.kvarter &&
+             h.kvarter !== ctx.team &&
+             (h.styrka ?? 50) >= 50
+    );
+    const källor = [...new Set(kunskapsHändelser.map((h) => h.kvarter))];
 
     const grundStyrka = e.styrka ?? 50;
     let styrka;
     let skäl;
     if (källor.length === 0) {
       styrka = Math.max(5, grundStyrka - 25);
-      skäl = 'inget stöd i kedjan, svaret står ensamt';
+      skäl = 'inget bekräftande underlag i kedjan';
     } else {
       styrka = Math.min(100, grundStyrka + 10 * Math.min(källor.length, 3));
-      skäl = `bekräftat av ${källor.length} annan/andra förmåga/förmågor: ${källor.join(', ')}`;
+      skäl = `bekräftat av ${källor.length} förmåga/förmågor: ${källor.join(', ')}`;
     }
     const godkänt = styrka >= GODKÄND_GRÄNS;
 
