@@ -17,7 +17,7 @@ const st = {
   perInlagg: new Map(),   // inläggs-id -> fråga
   perHandelse: new Map(), // händelse-id -> fråga (vår fråga.ny och allt som byggts på den)
   ko: [],                 // frågor som väntar på plats under takten 6/min
-  svarsposter: new Set(), // kvarter som skickat svar.*: deras svar på Torget hörs inte som frågor
+  svarsposter: new Set(), // kvarter som skickat svar.*: deras trådsvar på Torget hörs inte som frågor
   hört: 0,
   timer: null,
 };
@@ -94,7 +94,8 @@ function harArbete() {
 }
 
 function las(e, team) {
-  if (SVAR_TYPER.test(e.typ) && e.kvarter !== team) st.svarsposter.add(e.kvarter);
+  // Alla svar.* räknas, även svar.utkast: Rösten skickar det innan svaret postas på Torget.
+  if (/^svar\./.test(e.typ) && e.kvarter !== team) st.svarsposter.add(e.kvarter);
   const n = e.nyttolast && typeof e.nyttolast === 'object' ? e.nyttolast : {};
   if (e.kvarter === team) {
     if (e.typ === 'fråga.ny' && n.inlägg && !st.perInlagg.has(n.inlägg)) {
