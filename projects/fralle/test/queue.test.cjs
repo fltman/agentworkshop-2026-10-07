@@ -379,9 +379,9 @@ test('attention begins at exactly 300 seconds without emitting or changing fair 
   t.mock.method(Date, 'now', () => now);
   plugin.onEvent(fromRequester(100, 'Anna'), context);
   plugin.onEvent(fromRequester(101, 'Bo'), context);
-  const order = status().kö.map(item => item.id);
   now += 299999;
   assert.equal(status().statistik.utan_framsteg, 0);
+  const order = status().kö.map(item => item.id);
   now++;
   const result = status();
   assert.equal(result.statistik.utan_framsteg_gräns_sek, 300);
@@ -715,6 +715,126 @@ test('a new reservation after expiration consumes a fresh fair turn', async t =>
   assert.equal((await api('/next')).body.fråga.id, 102);
 });
 
+test('unclaimed head parks at exactly two minutes, preserves the root and permits the next claimant', async t => {
+  let now = 1700000000000;
+  t.mock.method(Date, 'now', () => now);
+  voice();
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  now += 60000;
+  plugin.onEvent(fromRequester(101, 'Bo'), context);
+  now += 59999;
+  assert.equal((await api('/next')).body.fråga.id, 100);
+  assert.equal(status().statistik.parkerade, 0);
+  now++;
+  assert.equal((await api('/next')).body.fråga.id, 101);
+  const old = status().kö.find(item => item.id === 100);
+  assert.equal(old.parkerad_ts, now);
+  assert.equal(old.köplats, null);
+  assert.equal(old.varv, null);
+  assert.equal(old.status, 'väntar');
+  assert.match(old.turförklaring, /bevarad/);
+  assert.equal(status().statistik.parkering_gräns_sek, 120);
+  assert.equal(JSON.parse(readFileSync(join(temp, 'queue.json'), 'utf8')).turn, 0);
+  assert.equal((await api('/claim', { fråga_id: 100, team: 'mikael' })).code, 409);
+  assert.equal((await api('/claim', { fråga_id: 101, team: 'mikael' })).code, 200);
+  assert.equal(sent.length, 2);
+  plugin.init(context);
+  assert.equal(status().kö.find(item => item.id === 100).parkerad_ts, now);
+  answer(100);
+  assert.ok(status().besvarade.some(item => item.id === 100));
+});
+
+test('head deadline survives restart and repeated observations never postpone parking', t => {
+  let now = 1700000000000;
+  t.mock.method(Date, 'now', () => now);
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  now += 119999;
+  lifecycle(100, 'minne.träff');
+  plugin.init(context);
+  assert.equal(status().statistik.parkerade, 0);
+  now++;
+  lifecycle(100, 'minne.träff');
+  assert.equal(status().statistik.parkerade, 1);
+  plugin.onMessage({ id: 901, ts: now, from: 'Bo', channel: 'torget', text: '@fralle återkalla 100' }, context);
+  assert.match(posted.at(-1).text, /ditt eget/);
+  plugin.onMessage({ id: 902, ts: now, from: 'ANNA', channel: 'torget', text: '@fralle återkalla 100' }, context);
+  assert.equal(status().kö.length, 0);
+  assert.equal(status().återkallade[0].id, 100);
+});
+
+test('active renewed lease protects waiting questions; each new head receives a full fresh deadline', async t => {
+  let now = 1700000000000;
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(console, 'error', () => {});
+  voice();
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  plugin.onEvent(fromRequester(101, 'Bo'), context);
+  await api('/claim', { fråga_id: 100, team: 'mikael' });
+  now += 119999;
+  const renewed = await api('/claim', { fråga_id: 100, team: 'mikael' });
+  now = renewed.body.reservation.till - 1;
+  assert.equal((await api('/next')).body.upptagen, true);
+  assert.equal(status().statistik.parkerade, 0);
+  now++;
+  assert.equal((await api('/next')).body.fråga.id, 101);
+  now += 119999;
+  assert.equal((await api('/next')).body.fråga.id, 101);
+  now++;
+  assert.equal((await api('/next')).body.fråga.id, 100);
+  assert.equal(status().statistik.parkerade, 1);
+  assert.equal((await api('/claim', { fråga_id: 100, team: 'mikael' })).code, 200);
+});
+
+test('upgrade parks all legacy dead heads immediately without deleting or emitting new events', async t => {
+  let now = 1700000000000;
+  t.mock.method(Date, 'now', () => now);
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  plugin.onEvent(fromRequester(101, 'Bo'), context);
+  const saved = JSON.parse(readFileSync(join(temp, 'queue.json'), 'utf8'));
+  for (const item of saved.questions) delete item.huvud_sedan;
+  writeFileSync(join(temp, 'queue.json'), JSON.stringify(saved));
+  now += 300000;
+  plugin.init(context);
+  assert.equal((await api('/next')).body.fråga, null);
+  assert.equal(status().kö.length, 2);
+  assert.equal(status().statistik.parkerade, 2);
+  assert.ok(status().kö.every(item => item.köplats === null));
+  assert.equal(sent.length, 2);
+  plugin.onEvent(fromRequester(102, 'Clara'), context);
+  assert.equal((await api('/next')).body.fråga.id, 102);
+});
+
+test('traffic-limit backoff completes before parking; successful handoff grants a fresh claim deadline', async t => {
+  let now = 1700000000000;
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(console, 'error', () => {});
+  failure = 'max 6 händelser per minut och kvarter';
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  for (let i = 0; i < 2; i++) {
+    now += 60000;
+    plugin.tick(context);
+  }
+  assert.equal(status().statistik.parkerade, 0);
+  failure = null;
+  now += 60000;
+  plugin.tick(context);
+  assert.equal(sent.length, 4);
+  now += 119999;
+  assert.equal((await api('/next')).body.fråga.id, 100);
+  now++;
+  assert.equal((await api('/next')).body.fråga, null);
+  assert.equal(status().statistik.parkerade, 1);
+});
+
+test('corrupt parking metadata fails explicitly instead of reviving a dead question', () => {
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  const saved = JSON.parse(readFileSync(join(temp, 'queue.json'), 'utf8'));
+  saved.questions[0].parkerad_ts = 'yesterday';
+  writeFileSync(join(temp, 'queue.json'), JSON.stringify(saved));
+  assert.throws(() => plugin.init(context), /Ogiltig parkering/);
+  assert.match(status(503).error, /Ogiltig parkering/);
+});
+
 test('corrupt storage fails explicitly rather than returning an empty healthy queue', () => {
   writeFileSync(join(temp, 'queue.json'), '{broken');
   assert.throws(() => plugin.init(context), SyntaxError);
@@ -732,6 +852,15 @@ test('real HTTP queue reserves fair turns, tracks lifecycle and persists cancell
   const plugins = join(directory, 'plugins');
   mkdirSync(plugins);
   cpSync(join(root, 'board/plugins/fralle'), join(plugins, 'fralle'), { recursive: true });
+  const storedDirectory = join(directory, 'data/plugins/fralle');
+  mkdirSync(storedDirectory, { recursive: true });
+  writeFileSync(join(storedDirectory, 'queue.json'), JSON.stringify({
+    version: 3, processed: [219], errors: [], turn: 0, served: [], lastClaim: null,
+    questions: [{ id: 219, ts: Date.now() - 3600000, fråga: 'Gammalt obesvarat köhuvud',
+      frågare: 'legacy', inlägg: null, kanal: 'torget', basprioritet: 50, status: 'väntar',
+      steg: 'påbörjad', mottagare: [], prioritetshändelse: 220,
+      utskick: { försök: 1, nästa_försök: null, fel: null } }],
+  }));
   let processHandle;
   let logs = '';
   t.after(async () => {
@@ -787,6 +916,14 @@ test('real HTTP queue reserves fair turns, tracks lifecycle and persists cancell
   }
   const claim = await post('/api/messages', { from: 'minneslaget', channel: 'bygge', text: 'Team minneslaget tar förmågan Minnet.' });
   await post('/api/messages', { from: 'mikael', channel: 'bygge', text: 'Vi tar Rösten.' });
+  const parked = await read('/t/fralle/status');
+  assert.equal(parked.kö[0].id, 219);
+  assert.equal(parked.kö[0].köplats, null);
+  assert.equal(parked.statistik.parkerade, 1);
+  assert.equal((await read('/t/fralle/next')).fråga, null);
+  await reserve(219, 409);
+  await post('/api/messages', { from: 'legacy', channel: 'torget', text: '@fralle återkalla 219' });
+  await until('/t/fralle/status', value => value.återkallade.some(item => item.id === 219));
   const input = await post('/api/events', { from: 'orat', typ: 'fråga.ny', nyttolast: { fråga: 'Vem bygger minnet?', frågare: 'Anna', inlägg: claim.id, kanal: 'bygge' } });
   let result;
   for (let tries = 0; tries < 30; tries++) {
@@ -820,7 +957,7 @@ test('real HTTP queue reserves fair turns, tracks lifecycle and persists cancell
   assert.equal((await read('/t/fralle/status')).kö.length, 4);
   const cancelled = await post('/api/messages', { from: 'CLARA', channel: 'torget', text: '@fralle återkalla ' + withdrawn.id });
   await until('/api/messages?channel=torget', messages => messages.some(message => message.reply_to === cancelled.id && message.text.includes('är återkallad')));
-  result = await until('/t/fralle/status', value => value.återkallade.length === 1);
+  result = await until('/t/fralle/status', value => value.återkallade.some(item => item.id === withdrawn.id));
   assert.deepEqual(result.kö.map(item => item.id), [input.id, otherRequester.id, another.id]);
   assert.equal((await read('/t/fralle/next')).fråga.id, input.id);
   await reserve(another.id, 409);

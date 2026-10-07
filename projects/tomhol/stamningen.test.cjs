@@ -71,6 +71,18 @@ test('maximum sample fits the actual bus message length limit', () => {
   assert.equal(s.sent[0].nyttolast.kallor.length, 6);
   assert.deepEqual(s.sent[0].nyttolast.signaler, { fragor: 20, hinder: 20, uppskattning: 20, omtanke: 20 });
   assert.ok(JSON.stringify({ ...s.sent[0], styrka: null }).length <= 2000);
+  assert.match(s.sent[0].nyttolast.rad, /20 frågor, 20 hinder, 20 uppskattningar och 20 uttryck av omtanke\./);
+});
+
+test('payload carries a readable rad first, with Swedish singular/plural and no raw JSON', () => {
+  const s = setup();
+  s.message('Varför? Tack!');
+  s.message('Hej');
+  s.event();
+  const payload = s.sent[0].nyttolast;
+  assert.equal(Object.keys(payload)[0], 'rad');
+  assert.match(payload.rad, /^I #\S+ de senaste 10 minuterna \(2 inlägg\): 1 fråga och 1 uppskattning\. Det är språksignaler, inte känslor\.$/);
+  assert.doesNotMatch(payload.rad, /[{}"]/);
 });
 
 test('expressed care: Swedish/English support phrases and hearts, once per message', () => {
