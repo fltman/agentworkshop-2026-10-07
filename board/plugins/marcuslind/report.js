@@ -42,8 +42,12 @@ function bygg(ctx) {
   const allaTs = [...sammanfattningar, ...anteckningar, ...sms].map(r => r.ts).filter(t => typeof t === 'number');
   const fullaListor = sammanfattningar.length >= MAX.sammanfattningar
     || anteckningar.length >= MAX.anteckningar || sms.length >= MAX.sms;
+  const tackningFran = allaTs.length ? Math.min(...allaTs) : null;
+  // Hela perioden är styrkt bara om vi har en sparad post från före periodens start (då observerade vi redan),
+  // ingen lista har tappat poster och perioden inte slutar i framtiden (5 s klockskillnad tillåts).
+  const komplett = tackningFran !== null && tackningFran <= from && !fullaListor && to <= nu + 5000;
 
-  const record = (r, typ) => ({
+  const record = r => ({
     question_id: r.id ?? null,
     received_at: r.ts,
     answered_at: null,
@@ -51,8 +55,6 @@ function bygg(ctx) {
     audience: 'unknown',
     useful: null,
     saved_minutes: null,
-    kind: typ,
-    channel: r.kanal || null,
   });
 
   return {
@@ -62,19 +64,19 @@ function bygg(ctx) {
     generated_at: nu,
     period: { from, to },
     coverage: {
-      from: allaTs.length ? Math.min(...allaTs) : null,
-      to: allaTs.length ? Math.max(...allaTs) : null,
-      // Okända gränser (inget sparat) kan inte styrka full täckning.
-      complete: allaTs.length > 0 && !fullaListor,
-      note: `Mötet sparar högst ${MAX.sammanfattningar} sammanfattningar, ${MAX.anteckningar} anteckningar och ${MAX.sms} SMS på disk. Sökningar i anteckningar sparas inte. SMS är bara testläge, inget skickas. answered_at är null: Rösten äger svaret.`,
+      from: tackningFran,
+      to: tackningFran !== null ? nu : null,
+      complete: komplett,
+      note: `Täckningen räknas från Mötets äldsta sparade post. Mötet sparar högst ${MAX.sammanfattningar} sammanfattningar, ${MAX.anteckningar} anteckningar och ${MAX.sms} SMS på disk. Sökningar i anteckningar sparas inte. SMS är bara testläge, inget skickas. answered_at är null: Rösten äger svaret.`,
     },
     metrics: [
-      { key: 'sammanfattningar', label: 'Sammanfattningar', value: pS.length, unit: 'st', scope: 'period' },
-      { key: 'anteckningar', label: 'Sparade anteckningar', value: pA.length, unit: 'st', scope: 'period' },
-      { key: 'sms_test', label: 'Test-SMS (inget skickat)', value: pSms.length, unit: 'st', scope: 'period' },
-      { key: 'anteckningar_sparade', label: 'Anteckningar i minnet', value: anteckningar.length, unit: 'st', scope: 'retained' },
+      { key: 'sammanfattningar', label: 'Sammanfattningar', value: pS.length, unit: 'count', scope: 'period' },
+      { key: 'sammanfattningar_kallinlagg', label: 'Källinlägg i sammanfattningarna', value: pS.reduce((n, r) => n + (Number(r.antalInlägg) || 0), 0), unit: 'count', scope: 'period' },
+      { key: 'anteckningar', label: 'Sparade anteckningar', value: pA.length, unit: 'count', scope: 'period' },
+      { key: 'sms_test', label: 'Test-SMS (inget skickat)', value: pSms.length, unit: 'count', scope: 'period' },
+      { key: 'anteckningar_sparade', label: 'Anteckningar i minnet', value: anteckningar.length, unit: 'count', scope: 'retained' },
     ],
-    records: [...pS.map(r => record(r, 'sammanfattning')), ...pA.map(r => record(r, 'anteckning'))]
+    records: [...pS, ...pA].map(record)
       .sort((a, b) => a.received_at - b.received_at),
   };
 }
