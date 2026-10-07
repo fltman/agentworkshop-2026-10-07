@@ -28,6 +28,10 @@
   .k .hero .titel b { display:block; font-size:19px; color:#fff; letter-spacing:.04em; }
   .k .hero .titel span { color:#5fd7a7; font-size:12px; letter-spacing:.06em; text-transform:uppercase; }
   .k.stor .hero { display:none; }
+  /* Nervsystemet direkt i staden: pulserna ritas på ett lager ovanpå rutorna, som inte tar emot klick. */
+  .nerver { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:4; }
+  .k.puls { animation: puls 1.2s ease-out; }
+  @keyframes puls { 0% { box-shadow:0 0 0 2px var(--glod), 0 0 40px 8px var(--glod); } 100% { box-shadow:0 0 0 0 transparent, 0 0 0 0 transparent; } }
   .k .bar .sp { margin-left:auto; }
   .k .bar a, .k .bar button { color:var(--dim); background:none; border:0; font:inherit; cursor:pointer; text-decoration:none; padding:2px 6px; border-radius:5px; }
   .k .bar a:hover, .k .bar button:hover { color:var(--fg); background:#1b2027; }
@@ -133,6 +137,58 @@ async function ansikten() {
   } catch (e) {}
 }
 setTimeout(ansikten, 1500); setInterval(ansikten, 30000);
+
+// Nervsystemet direkt i staden: när ett kvarter reagerar på ett annat kvarters händelse (orsak) far en
+// ljuspuls mellan deras rutor, och mottagaren lyser upp. Nya frågor kommer från Torget i sidhuvudet.
+const duk = document.createElement('canvas'); duk.className = 'nerver'; document.body.appendChild(duk);
+const pg = duk.getContext('2d'), DPR = Math.min(devicePixelRatio || 1, 2);
+function dukStorlek() { duk.width = innerWidth * DPR; duk.height = innerHeight * DPR; pg.setTransform(DPR, 0, 0, DPR, 0, 0); }
+addEventListener('resize', dukStorlek); dukStorlek();
+const nyans = n => { let h = 0; for (const c of n) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
+const kandaEv = new Map(), pulsKo = [], flygande = [];
+function ruta(team) { for (const [k, d] of seen) if (namn(k) === team) return d; return null; }
+function mitt(el, hero) { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + (hero ? Math.min(75, r.height / 2) : r.height / 2) }; }
+function blixt(d, h) { if (!d) return; d.style.setProperty('--glod', `hsla(${h}, 85%, 62%, .85)`); d.classList.remove('puls'); void d.offsetWidth; d.classList.add('puls'); }
+function nyHandelse(e) {
+  kandaEv.set(e.id, e); if (kandaEv.size > 2000) kandaEv.delete(kandaEv.keys().next().value);
+  const mal = ruta(e.kvarter), o = e.orsak ? kandaEv.get(e.orsak) : null;
+  if (!mal) return;
+  const h = nyans(o ? o.kvarter : e.kvarter);
+  if (o && o.kvarter !== e.kvarter && ruta(o.kvarter)) flygande.push({ fran: () => mitt(ruta(o.kvarter), true), till: () => mitt(mal, true), t: 0, h, text: e.typ, mal });
+  else if (!o && e.typ.startsWith('fråga')) flygande.push({ fran: () => mitt(document.querySelector('header h1'), false), till: () => mitt(mal, true), t: 0, h, text: e.typ, mal });
+  else blixt(mal, nyans(e.kvarter));
+}
+function ritaNerver() {
+  pg.clearRect(0, 0, innerWidth, innerHeight);
+  if (document.querySelector('.k.stor')) flygande.length = 0;
+  for (let i = flygande.length - 1; i >= 0; i--) {
+    const p = flygande[i]; p.t += 0.016;
+    const a = p.fran(), b = p.till();
+    const kx = (a.x + b.x) / 2 - (b.y - a.y) * 0.2, ky = (a.y + b.y) / 2 + (b.x - a.x) * 0.2;
+    const pos = t => { const u = 1 - t; return { x: u * u * a.x + 2 * u * t * kx + t * t * b.x, y: u * u * a.y + 2 * u * t * ky + t * t * b.y }; };
+    pg.beginPath(); pg.moveTo(a.x, a.y); pg.quadraticCurveTo(kx, ky, b.x, b.y);
+    pg.strokeStyle = `hsla(${p.h}, 85%, 62%, ${0.3 * (1 - Math.min(1, p.t))})`; pg.lineWidth = 2; pg.stroke();
+    pg.save(); pg.shadowBlur = 26; pg.shadowColor = `hsl(${p.h}, 85%, 62%)`;
+    for (let s = 0; s < 6; s++) { const q = pos(Math.max(0, Math.min(1, p.t) - s * 0.03)); pg.globalAlpha = 1 - s * 0.15; pg.fillStyle = `hsl(${p.h}, 90%, ${66 + s * 3}%)`; pg.beginPath(); pg.arc(q.x, q.y, 7 - s, 0, 7); pg.fill(); }
+    pg.restore();
+    const q = pos(Math.min(1, p.t)); pg.font = '12px ui-monospace, Menlo, monospace'; pg.fillStyle = `hsl(${p.h}, 85%, 72%)`; pg.fillText(p.text, q.x + 11, q.y - 11);
+    if (p.t >= 1) { blixt(p.mal, p.h); flygande.splice(i, 1); }
+  }
+  requestAnimationFrame(ritaNerver);
+}
+requestAnimationFrame(ritaNerver);
+// Historiken läses in utan pulser, så att staden inte blixtrar av allt som redan hänt. Sedan bara det nya,
+// några i taget, och aldrig en kö längre än 40: hellre hoppa över än ligga efter.
+let sistaEv = null;
+async function hamtaEv() {
+  try {
+    if (sistaEv === null) { const l = await fetch('/api/events?limit=300').then(r => r.json()); for (const e of l) kandaEv.set(e.id, e); sistaEv = l.length ? l[l.length - 1].id : 0; return; }
+    for (const e of await fetch('/api/events?since=' + sistaEv + '&limit=100').then(r => r.json())) { sistaEv = Math.max(sistaEv, e.id); pulsKo.push(e); }
+    while (pulsKo.length > 40) kandaEv.set(pulsKo[0].id, pulsKo.shift());
+  } catch (e) {}
+}
+setInterval(() => { const e = pulsKo.shift(); if (e) nyHandelse(e); }, 250);
+hamtaEv(); setInterval(hamtaEv, 1200);
 
 // Efter en deploy har kvarteren ny kod, men iframarna sitter kvar med den gamla. Servern byter
 // startad vid varje omstart: då laddar sidan om sig, så storskärmen aldrig visar en gammal stad.

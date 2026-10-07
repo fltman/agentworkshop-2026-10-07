@@ -4,9 +4,11 @@ header span, .note { color: #a4b6c8; font-size: 12px; }
 h1 { color: #75dfc1; margin: 4px 0; font-size: 30px; }
 h2 { font-size: 16px; margin-top: 24px; }
 p { margin: 8px 0; }
-article { border-left: 3px solid #75dfc1; background: #192632; padding: 12px; margin: 12px 0; }
-article.error { border-color: #ff9c9c; }
+details { border-left: 3px solid #75dfc1; background: #192632; padding: 12px; margin: 12px 0; }
+summary { cursor: pointer; }
+.filters { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+select { font: inherit; padding: 4px; max-width: 100%; }
 .meta, #connection { color: #b8cbdc; font-size: 13px; }
-#connection.error, #errors .error { color: #ff9c9c; }
+.error { color: #ff9c9c; }
 ul { padding-left: 20px; }
 a { color: #8de5ff; }

@@ -12,13 +12,18 @@
   .antal{color:#8b949e}
   .text{color:#c9d1d9;margin-top:2px}
   .tomt{color:#8b949e}
+  .portratt{width:100%;max-width:220px;border-radius:6px;display:block;margin:0 auto 10px}
 </style></head>
 <body><div class="wrap">
   <h1>MÖTET</h1>
+  <img id="portratt" class="portratt" style="display:none">
   <p class="sub">sammanfattar en kanal när @kollegan blir ombedd</p>
   <ul id="lista"><li class="tomt">inga sammanfattningar ännu</li></ul>
 </div>
 <script>
+fetch('/t/marcuslind/portratt').then(r => r.json()).then(p => {
+  if (p && p.url) { const img = document.getElementById('portratt'); img.src = p.url; img.style.display = 'block'; }
+}).catch(() => {});
 const visa = () => fetch('/t/marcuslind/sammanfattningar').then(r => r.json()).then(poster => {
   const el = document.getElementById('lista');
   if (!poster.length) { el.innerHTML = '<li class="tomt">inga sammanfattningar ännu</li>'; return; }

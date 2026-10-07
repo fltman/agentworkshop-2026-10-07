@@ -354,3 +354,60 @@ test('mallfrågor om olika saker får ingen "samma fråga"-not, riktig upprepnin
   const c = m.fraga('leiost har precis börjat skicka karta.ritad. Vad bygger leiost, och vem lyssnar?');
   assert.match(c.nyttolast.svar, /Samma fråga ställdes/);
 });
+
+test('Stadsbladet: senaste numret med notisernas källinlägg, och svar när inget nummer finns', () => {
+  const h = [
+    { id: 700, ts: Date.now() - 90000, typ: 'nyheter.nummer', kvarter: 'redaktionen', nyttolast: { nummer: 2, rubrik: 'Gammalt', notiser: [] } },
+    { id: 701, ts: Date.now() - 30000, typ: 'nyheter.nummer', kvarter: 'redaktionen', nyttolast: { nummer: 3, rubrik: 'Minnet minns allt', notiser: [{ text: 'holminator ropade Minnet.', kallor: [1] }] } },
+  ];
+  const m = nyttMinne(torget(), h);
+  const s = m.fraga('@kollegan vad står i senaste Stadsbladet?');
+  assert.match(s.nyttolast.svar, /^Stadsbladet nr 3 \(\d\d:\d\d\): Minnet minns allt\. holminator ropade Minnet\./);
+  assert.equal(s.styrka, 85);
+  assert.deepEqual(s.nyttolast.källor.map(k => k.id), [701, 1]);
+  assert.match(m.fraga('what is in the news today?').nyttolast.svar, /^Stadsbladet nr 3/);
+  const tom = nyttMinne(torget());
+  assert.match(tom.fraga('vad skriver tidningen?').nyttolast.svar, /inte sett något nummer av Stadsbladet/);
+});
+
+test('kunskap.ny väntar när svaren tagit minutens utrymme, och tappas inte', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.now() });
+  const m = nyttMinne(torget());
+  m.mod.onMessage(post('heimlen', 'bygge', 'heimlen tar förmågan Minnet.'), m.ctx);
+  m.fraga('vem bygger rösten?'); m.fraga('vem bygger kön?'); m.fraga('vem bygger mötet?');
+  t.mock.timers.tick(15000);
+  assert.equal(m.skickat.filter(s => s.typ === 'kunskap.ny').length, 0, 'tre svar senaste minuten: kunskap.ny får vänta');
+  t.mock.timers.tick(45000);
+  const k = m.skickat.filter(s => s.typ === 'kunskap.ny');
+  assert.equal(k.length, 1, 'när minuten gått skickas den köade krocken');
+  assert.match(k[0].nyttolast.fakta, /^Krock: heimlen ropade Minnet/);
+});
+
+test('kunskap.ny som servern nekar ligger kvar i kön', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const m = nyttMinne(torget());
+  const emit = m.ctx.board.emit;
+  let neka = true;
+  m.ctx.board.emit = (typ, o) => (neka ? { error: 'för många händelser' } : emit(typ, o));
+  m.mod.onMessage(post('heimlen', 'bygge', 'heimlen tar förmågan Minnet.'), m.ctx);
+  t.mock.timers.tick(15000);
+  assert.equal(m.skickat.length, 0);
+  neka = false;
+  t.mock.timers.tick(15000);
+  assert.equal(m.skickat.length, 1);
+  assert.match(m.skickat[0].nyttolast.fakta, /^Krock: heimlen/);
+});
+
+test('ett svar som servern nekar skickas igen efter några sekunder', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const m = nyttMinne(torget());
+  const emit = m.ctx.board.emit;
+  let nekade = 0;
+  m.ctx.board.emit = (typ, o) => (nekade++ < 1 ? { error: 'för många händelser' } : emit(typ, o));
+  assert.equal(m.fraga('vem bygger rösten?'), undefined);
+  t.mock.timers.tick(4000);
+  const s = m.skickat.filter(x => x.typ === 'minne.träff');
+  assert.equal(s.length, 1);
+  assert.match(s[0].nyttolast.svar, /^mikael bygger Rösten/);
+  assert.ok(s[0].orsak, 'svaret behåller orsak');
+});

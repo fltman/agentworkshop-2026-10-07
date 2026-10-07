@@ -11,6 +11,8 @@
 // GET /t/mikael/status → de senaste frågorna/svaren vi hanterat, för rutan på /staden.
 
 const VÄNTA_PÅ_MINNE_MS = 2500;
+const VÄNTA_LÄNGRE_MS = 4000;          // frågor om sammanfattningar: Mötet svarar ofta senare
+const VÄNTA_PÅ_GRANSKNING_MS = 20000;  // postar ett ogranskat svar om Granskaren uteblir
 const MAX_HISTORIK = 30;
 
 // Modulens eget minne. Ett plugin laddas en gång per serverprocess, så vanliga variabler räcker.
@@ -43,10 +45,12 @@ module.exports = {
       });
 
       const frågaId = e.id;
+      const fråga = (e.nyttolast && e.nyttolast.fråga) || '';
+      const väntetid = /sammanfatta|hänt|hände/i.test(fråga) ? VÄNTA_LÄNGRE_MS : VÄNTA_PÅ_MINNE_MS;
       const timer = setTimeout(() => {
         try { formuleraSvar(frågaId, board); }
         catch (err) { console.error('[mikael] kunde inte formulera svar', err && err.message); }
-      }, VÄNTA_PÅ_MINNE_MS);
+      }, väntetid);
       if (timer.unref) timer.unref();
       return;
     }
@@ -55,7 +59,7 @@ module.exports = {
       const frågaId = hittaFråga(e.orsak);
       if (frågaId) {
         const text = plockaText(e.nyttolast);
-        if (text) pending.get(frågaId).kunskap.push({ källa: e.kvarter, text, id: e.id });
+        if (text) pending.get(frågaId).kunskap.push({ källa: e.kvarter, text, id: e.id, typ: e.typ, styrka: e.styrka });
       }
       return;
     }
@@ -67,6 +71,7 @@ module.exports = {
 
       const post = pending.get(frågaId);
       if (!post) return;
+      if (post.granskningsTimer) { clearTimeout(post.granskningsTimer); post.granskningsTimer = null; }
 
       const styrka = typeof e.styrka === 'number' ? e.styrka : 50;
       const osäkert = styrka < 60;
@@ -106,10 +111,15 @@ function formuleraSvar(frågaId, board) {
   const post = pending.get(frågaId);
   if (!post) return; // redan hanterad eller borttagen
 
+  // Prioritera Mötets sammanfattning när den finns, annars Minnets träffar med rimlig styrka.
+  // Minnet skickar ibland styrka 0-20 med "saknar underlag", det ska inte duggas in i svaret.
+  const sammanfattning = post.kunskap.find((k) => k.typ === 'sammanfattning.klar');
+  const bra = sammanfattning ? [sammanfattning] : post.kunskap.filter((k) => k.styrka == null || k.styrka >= 50);
+
   let svarstext;
   let styrka;
-  if (post.kunskap.length) {
-    svarstext = post.kunskap.map((k) => k.text).join(' ');
+  if (bra.length) {
+    svarstext = bra.map((k) => k.text).join(' ');
     styrka = 70;
   } else {
     svarstext = `Jag har inget säkert underlag från Minnet än om "${post.fråga}". Fråga igen om en stund, eller nämn ämnet mer specifikt.`;
@@ -123,5 +133,28 @@ function formuleraSvar(frågaId, board) {
     nyttolast: { fråga: post.fråga, svar: svarstext, kanal: post.kanal, inlägg: post.inlägg },
   });
   const utkastId = resultat && resultat.handelse && resultat.handelse.id;
-  if (utkastId) utkastTillFråga.set(utkastId, frågaId);
+  if (!utkastId) return;
+  utkastTillFråga.set(utkastId, frågaId);
+
+  // Granskaren kan vara nere eller sakna kapacitet: posta ett ogranskat svar hellre än inget alls.
+  const timer = setTimeout(() => {
+    try { postaOgranskat(frågaId, utkastId, board); }
+    catch (err) { console.error('[mikael] kunde inte posta ogranskat svar', err && err.message); }
+  }, VÄNTA_PÅ_GRANSKNING_MS);
+  if (timer.unref) timer.unref();
+  post.granskningsTimer = timer;
+}
+
+function postaOgranskat(frågaId, utkastId, board) {
+  const post = pending.get(frågaId);
+  if (!post) return; // redan besvarad via svar.granskat, eller borttagen
+
+  const hälsning = post.frågare ? `Kollegan: @${post.frågare}, ` : 'Kollegan: ';
+  board.post(`${hälsning}(ogranskat) ${post.svarstext}`, post.kanal, post.inlägg);
+  board.emit('svar.klart', { orsak: utkastId, nyttolast: { fråga: post.fråga, inlägg: post.inlägg } });
+
+  historik.push({ fråga: post.fråga, svar: `(ogranskat) ${post.svarstext}`, styrka: null, ts: Date.now() });
+  if (historik.length > MAX_HISTORIK) historik.shift();
+
+  pending.delete(frågaId);
 }
