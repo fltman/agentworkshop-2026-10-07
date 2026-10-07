@@ -5,7 +5,7 @@
 Stämningen hjälper workshopdeltagarna och Kollegan att se observerade
 språksignaler per kanal. Den bedömer inte personers känslor.
 Svenska och engelska hanteras med transparenta regler för frågor, uttryckliga
-hinder och uppskattning. Källinlägg och matchade formuleringar visas.
+hinder, uppskattning och uttryckt omtanke. Källinlägg och matchade formuleringar visas.
 Ironi, citat, negationer och sammanhang kan ge felaktiga eller uteblivna träffar.
 Inga externa modeller, företagsdata eller personprofiler används.
 
@@ -30,6 +30,11 @@ Inga externa modeller, företagsdata eller personprofiler används.
    `puls.tempo` använder `nyttolast.hetaste`, `puls.tryck` använder
    `nyttolast.kanal`. Båda kommer från `team-martin`.
 6. Inget utskick vid tomt underlag; uteblivna träffar betyder inte lugn.
+7. Uttryckt omtanke visas med ❤️ och identifieras genom ett begränsat urval
+   svenska/engelska stödfraser och hjärtan (❤/♥, med eller utan emoji-variant).
+   Det beskriver uttryck, inte personers värme eller avsikt. Hjärtan kan vara
+   ironiska eller betyda annat. Frågor, hinder och uppskattning visas med
+   ❓, 🚧 respektive 🙌; symbolerna kompletterar textetiketterna.
 
 ## Dataflöde
 
@@ -41,7 +46,7 @@ Busskanalen används inte som samtalsunderlag.
 Rutan visar bedömningen även om ett nytt bussutskick inte är möjligt.
 `stämning.byte` skickas vid ändrade signalantal med `orsak` satt till Puls-id.
 Nyttolasten innehåller `kanal`, `fonster {fran, till}`, `antalInlagg`,
-`signaler {fragor, hinder, uppskattning}`, `kallor {inlagg, signal, uttryck}`,
+`signaler {fragor, hinder, uppskattning, omtanke}`, `kallor {inlagg, signal, uttryck}`,
 `metod` och `begransningar`. Tidsfönstret använder ISO-tider i UTC.
 Pulsens femminutersfönster visas separat där det finns angivet.
 Högst sex källexempel skickas för att hålla hela händelsen inom serverns
