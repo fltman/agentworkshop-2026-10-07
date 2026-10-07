@@ -411,3 +411,17 @@ test('ett svar som servern nekar skickas igen efter några sekunder', (t) => {
   assert.match(s[0].nyttolast.svar, /^mikael bygger Rösten/);
   assert.ok(s[0].orsak, 'svaret behåller orsak');
 });
+
+test('aktiefrågor lämnas till Kursen med låg styrka, babtist äger både Lotsen och Kursen', async () => {
+  const p = torget();
+  p.push(post('babtist', 'bygge', 'babtist tar en egen förmåga: Kursen. Frågar någon Kollegan om Sinch-aktien (kurs, aktie, börsen) hämtar Kursen kursen.'));
+  const m = nyttMinne(p);
+  for (const q of ['@kollegan vad är sinch-aktien värd idag?', 'hur går börsen?', 'what is the Sinch stock price?']) {
+    const s = m.fraga(q);
+    assert.equal(s.styrka, 20, q);
+    assert.match(s.nyttolast.svar, /^Det är Kursens uppgift, som babtist bygger\./, q);
+  }
+  assert.match(m.fraga('vem bygger kursen?').nyttolast.svar, /^babtist bygger Kursen/);
+  const egna = (await m.get('/fakta')).filter(f => f.team === 'babtist').map(f => f.förmåga).sort();
+  assert.deepEqual(egna, ['Kursen', 'Lotsen']);
+});

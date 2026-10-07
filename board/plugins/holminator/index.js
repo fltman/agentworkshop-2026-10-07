@@ -162,6 +162,8 @@ const kalla = p => ({ id: p.id, från: p.from, kanal: p.channel, utdrag: utdrag(
 const UPPDRAG = [
   { re: /sammanfatta|summar/, förmåga: 'mötet' },
   { re: /översätt|translat|på engelska|in english|på svenska|in swedish/, förmåga: 'översättaren' },
+  // Ordet "kursen" ensamt räknas inte: "vem bygger kursen?" är en vem-fråga som Minnet själv svarar på.
+  { re: /aktie|börs|\bstock|share price/, förmåga: 'kursen' },
 ];
 
 // Uppslaget. Returnerar { svar, styrka, källor }.

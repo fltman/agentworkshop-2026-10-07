@@ -1,5 +1,7 @@
 const WINDOW_MS = 10 * 60 * 1000;
 const LIMIT = 20;
+const HISTORY_LIMIT = 5000;
+const BUCKET_MS = 10000;
 const states = new WeakMap();
 const rules = {
   fragor: /\?|(?<![\p{L}])(?:hur|varför|vem|vilka|vilken|när|how|why|who|what|when|where)(?![\p{L}])/giu,
@@ -9,8 +11,71 @@ const rules = {
 };
 
 function state(ctx) {
-  if (!states.has(ctx.board)) states.set(ctx.board, { kanaler: new Map(), utskick: [], fel: null });
+  if (!states.has(ctx.board)) {
+    const now = Date.now();
+    const initial = ctx.board.query({ limit: 500 });
+    const oldest = initial.reduce((ts, m) => Math.min(ts, m.ts), now);
+    const coverage = initial.length >= 500 ? Math.max(now - WINDOW_MS, oldest + 1) : now - WINDOW_MS;
+    states.set(ctx.board, {
+      kanaler: new Map(), utskick: [], fel: null,
+      history: new Map(), coverage,
+    });
+    for (const m of initial) remember(states.get(ctx.board), m, now);
+  }
   return states.get(ctx.board);
+}
+
+function remember(st, m, now) {
+  for (const [id, item] of st.history) {
+    if (item.ts <= now - WINDOW_MS) st.history.delete(id);
+  }
+  if (m.channel !== 'kollegan-events' && typeof m.channel === 'string' &&
+      Number.isFinite(m.ts) && m.ts > now - WINDOW_MS && m.ts <= now &&
+      Number.isInteger(m.id) && typeof m.text === 'string') {
+    st.history.set(m.id, { id: m.id, ts: m.ts, channel: m.channel, text: m.text });
+  }
+  if (st.history.size > HISTORY_LIMIT) {
+    const sorted = [...st.history.values()].sort((a, b) => a.ts - b.ts || a.id - b.id);
+    for (const item of sorted.slice(0, sorted.length - HISTORY_LIMIT)) {
+      st.history.delete(item.id);
+      st.coverage = Math.max(st.coverage, item.ts + 1);
+    }
+  }
+}
+
+function signals(m) {
+  const result = [];
+  for (const [signal, rule] of Object.entries(rules)) {
+    const match = [...m.text.matchAll(rule)].find(candidate => {
+      if (signal !== 'hinder' && signal !== 'omtanke') return true;
+      return !/(?:inte|inte längre|aldrig|ej|not|no longer|never)\s+(?:\p{L}+\s+){0,2}$/iu
+        .test(m.text.slice(0, candidate.index));
+    });
+    if (match) result.push({ inlagg: m.id, signal, uttryck: match[0], ts: m.ts });
+  }
+  return result;
+}
+
+function timeline(st, now) {
+  const start = now - WINDOW_MS;
+  const channels = new Map();
+  for (const m of st.history.values()) {
+    if (m.ts <= start || m.ts > now) continue;
+    if (!channels.has(m.channel)) channels.set(m.channel, { kanal: m.channel, intervall: new Map(), markorer: [] });
+    const channel = channels.get(m.channel);
+    const ts = Math.floor(m.ts / BUCKET_MS) * BUCKET_MS;
+    channel.intervall.set(ts, (channel.intervall.get(ts) || 0) + 1);
+    channel.markorer.push(...signals(m));
+  }
+  return {
+    fran: start, till: now, tackningFran: Math.max(start, st.coverage),
+    intervallMs: BUCKET_MS, maxSkala: 10,
+    kanaler: [...channels.values()].sort((a, b) => a.kanal.localeCompare(b.kanal, 'sv')).map(channel => ({
+      kanal: channel.kanal,
+      intervall: [...channel.intervall].sort(([a], [b]) => a - b).map(([ts, antal]) => ({ ts, antal })),
+      markorer: channel.markorer.sort((a, b) => a.ts - b.ts || a.inlagg - b.inlagg),
+    })),
+  };
 }
 
 function fail(st, message) {
@@ -27,16 +92,9 @@ function assess(messages, kanal, now) {
   const signaler = { fragor: 0, hinder: 0, uppskattning: 0, omtanke: 0 };
   const kallor = [];
   for (const m of recent) {
-    for (const [signal, rule] of Object.entries(rules)) {
-      const matches = [...m.text.matchAll(rule)].filter(match => {
-        if (signal !== 'hinder' && signal !== 'omtanke') return true;
-        const before = m.text.slice(0, match.index);
-        return !/(?:inte|inte längre|aldrig|ej|not|no longer|never)\s+(?:\p{L}+\s+){0,2}$/iu.test(before);
-      });
-      if (matches.length) {
-        signaler[signal]++;
-        kallor.push({ inlagg: m.id, signal, uttryck: matches[0][0] });
-      }
+    for (const { signal, inlagg, uttryck } of signals(m)) {
+      signaler[signal]++;
+      kallor.push({ inlagg, signal, uttryck });
     }
   }
   return {
@@ -56,6 +114,10 @@ function assess(messages, kanal, now) {
 }
 
 module.exports = {
+  init(ctx) { state(ctx); },
+
+  onMessage(m, ctx) { remember(state(ctx), m, Date.now()); },
+
   onEvent(e, ctx) {
     if (e.kvarter !== 'team-martin' || !['puls.tempo', 'puls.tryck'].includes(e.typ)) return;
     const st = state(ctx);
@@ -109,9 +171,13 @@ module.exports = {
   },
 
   handle(req, res, ctx) {
-    if (req.method !== 'GET' || ctx.path !== '/status') return false;
+    if (req.method !== 'GET' || !['/status', '/timeline'].includes(ctx.path)) return false;
     const st = state(ctx);
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    if (ctx.path === '/timeline') {
+      res.end(JSON.stringify(timeline(st, Date.now())));
+      return true;
+    }
     res.end(JSON.stringify({
       formaga: 'Stämningen',
       fel: st.fel,
