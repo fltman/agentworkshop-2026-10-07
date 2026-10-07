@@ -38,6 +38,15 @@ function arSvarFranKollegan(m) {
   return st.svarsposter.has(m.from) && !!m.reply_to;
 }
 
+// Ett tilltal, inte ett omnämnande: "@kollegan vem bygger minnet?" ja, "Örat hör @kollegan och ..." nej.
+function arTilltal(m) {
+  const t = m.text.trim();
+  if (/^(@[\w.-]+[\s,]+)*@kollegan\b/i.test(t)) return true;
+  if (m.channel === 'bygge') return false; // statusinlägg om Kollegan: bara tilltal i början räknas
+  if (t.length > 280 || !/\?/.test(t)) return false;
+  return /(^|[\s(,;.!])@kollegan\b(?!\s*["'`”»])/i.test(t) && !/["'`“«]\s*@kollegan/i.test(t);
+}
+
 function rotFraga(m, board) {
   let id = m.reply_to;
   if (!id) return null;
@@ -133,7 +142,7 @@ module.exports = {
 
   onMessage(m, { board, team }) {
     if (m.channel === BUSS || m.from === team) return;
-    if (!NAMNET.test(m.text) || arSvarFranKollegan(m) || st.perInlagg.has(m.id)) return;
+    if (!NAMNET.test(m.text) || !arTilltal(m) || arSvarFranKollegan(m) || st.perInlagg.has(m.id)) return;
     const rot = rotFraga(m, board);
     const f = {
       inlägg: m.id, kanal: m.channel, frågare: m.from, fråga: m.text.slice(0, 500), styrka: tydlighet(m.text), ts: m.ts,
