@@ -30,6 +30,7 @@ const st = {
   reaktioner: [],      // senaste puls.tryck vi skickat
   frammande: [],       // senaste händelser från andra kvarter som påverkat oss
   stamning: null,      // senaste stämning.byte från tomhol
+  portratt: null,      // {url, prompt} från ateljéns bild.klar
   sedda: new Set(),    // orsaks-id vi redan reagerat på (serverns gräns: 1 per orsak)
   senasteTempo: { ts: 0, styrka: -100 },
   emitLogg: [],
@@ -274,6 +275,17 @@ module.exports = {
         return;
       }
 
+      // Ateljén målar kvarterens porträtt. Är det vårt hänger vi upp det i rutan.
+      if (e.typ === 'bild.klar') {
+        const n = e.nyttolast || {};
+        if (n.till === team && typeof n.url === 'string' && n.url.startsWith('/')) {
+          st.portratt = { url: n.url, prompt: String(n.prompt || '').slice(0, 300), av: e.kvarter, ts: e.ts };
+        }
+        st.frammande.push({ ts: e.ts, typ: e.typ, kvarter: e.kvarter, styrka: e.styrka });
+        stadaFonster();
+        return;
+      }
+
       // Stämningen äger tonen. Vi visar den bredvid vår siffra, men räknar inte om den.
       if (e.typ === 'stämning.byte') {
         st.stamning = { ts: e.ts, kvarter: e.kvarter, styrka: e.styrka, nyttolast: e.nyttolast || null };
@@ -308,6 +320,7 @@ module.exports = {
         reaktioner: st.reaktioner.slice(-6).reverse(),
         främmande: st.frammande.slice(-6).reverse(),
         stämning: st.stamning,
+        porträtt: st.portratt,
       }));
       return true;
     }
