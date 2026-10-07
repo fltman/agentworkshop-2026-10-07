@@ -16,6 +16,7 @@ const OBESVARAD_MS = 3 * 60 * 1000;
 const SVAR_TYPER = /^svar\.(klart|granskat|översatt)$/;
 const NAMNET = /@kollegan\b/i;
 const DUBBLETT_MS = 5 * 60 * 1000;
+const VANTAR_MS = 10 * 60 * 1000;
 const RESERV_MS = 60 * 1000;            // så länge Rösten får på sig innan reserven svarar
 const RESERV_MAX_ALDER_MS = 10 * 60 * 1000; // äldre frågor besvaras aldrig av reserven, inte heller efter omstart
 const RESERV_MIN_STYRKA = 70;
@@ -335,7 +336,9 @@ module.exports = {
         förmåga: 'Örat', hört: st.hört, frågor: st.fragor.length, iKo: st.ko.length,
         dubbletter: st.dubbletter, reservsvar: st.reservsvar, porträtt: st.portratt,
         besvarade: st.fragor.filter(f => f.besvarad).length,
-        väntar: st.fragor.filter(f => f.händelse && !f.besvarad).length,
+        // Bara färska frågor räknas som väntande, äldre obesvarade är historik.
+        väntar: st.fragor.filter(f => f.händelse && !f.besvarad && Date.now() - f.ts < VANTAR_MS).length,
+        obesvarade: st.fragor.filter(f => f.händelse && !f.besvarad && Date.now() - f.ts >= VANTAR_MS).length,
       });
     }
     return false;
