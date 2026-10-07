@@ -261,3 +261,81 @@ test('pause and resume via @tomhol from our team or ledarens-agent only', () => 
   s.event({ id: 124 });
   assert.equal(s.sent.length, 1);
 });
+
+function reportSetup(messages, events = []) {
+  const plugin = require('../../board/plugins/tomhol/index.js');
+  const board = {
+    query: ({ channel, limit = 50 }) => messages.filter(m => !channel || m.channel === channel).slice(-limit),
+    channels: () => [...new Set(messages.map(m => m.channel))].map(channel => {
+      const list = messages.filter(m => m.channel === channel);
+      return { channel, count: list.length, last_id: list.at(-1).id, last_ts: list.at(-1).ts };
+    }),
+    events: limit => events.slice(-limit),
+    emit: () => ({ handelse: { id: 1 } }), post() {},
+  };
+  const ctx = { team: 'tomhol', board };
+  return query => {
+    let code, body;
+    const res = { writeHead(c) { code = c; }, end(b) { body = JSON.parse(b); } };
+    plugin.handle({ method: 'GET' }, res, { ...ctx, path: '/report-data', url: new URL(`http://x/t/tomhol/report-data?${query}`) });
+    return { code, body };
+  };
+}
+
+test('report-data follows Rapportörens V1 contract', t => {
+  const now = 1800000000000;
+  t.mock.method(Date, 'now', () => now);
+  const from = now - 3600000;
+  const msgs = [
+    { id: 1, ts: from - 1000, channel: 'bygge', from: 'a', text: 'Hur gör man? (före perioden)' },
+    { id: 2, ts: from + 1000, channel: 'bygge', from: 'a', text: 'Hur gör man?' },
+    { id: 3, ts: from + 2000, channel: 'bygge', from: 'mikael', text: 'Kollegan: vem bygger? Tack!' },
+    { id: 4, ts: from + 3000, channel: 'torget', from: 'b', text: 'Tack! ❤️ Det går inte.' },
+    { id: 5, ts: from + 4000, channel: 'stadens-saga', from: 'c', text: 'Varför? Tack!' },
+    { id: 6, ts: now - 1000, channel: 'torget', from: 'tomhol', text: 'Tack!' },
+  ];
+  const events = [
+    { id: 1, ts: from + 5000, kvarter: 'tomhol', typ: 'stämning.byte' },
+    { id: 2, ts: from - 5000, kvarter: 'tomhol', typ: 'stämning.byte' },
+    { id: 3, ts: from + 6000, kvarter: 'team-martin', typ: 'puls.tryck' },
+  ];
+  const get = reportSetup(msgs, events);
+  const { code, body } = get(`from=${from}&to=${now}`);
+  assert.equal(code, 200);
+  assert.equal(body.schema_version, 1);
+  assert.equal(body.team, 'tomhol');
+  assert.deepEqual(body.period, { from, to: now });
+  assert.deepEqual({ ...body.coverage, note: undefined }, { from, to: now, complete: true, note: undefined });
+  const m = Object.fromEntries(body.metrics.map(x => [x.key, x]));
+  assert.equal(m.messages_assessed.value, 2);
+  assert.equal(m.channels_assessed.value, 2);
+  assert.equal(m['signals.questions'].value, 1);
+  assert.equal(m['signals.obstacles'].value, 1);
+  assert.equal(m['signals.appreciation'].value, 1);
+  assert.equal(m['signals.care'].value, 1);
+  assert.equal(m.stamning_byte_emitted.value, 1);
+  assert.equal(m.paused.scope, 'snapshot');
+  for (const x of body.metrics) assert.match(x.key, /^[a-z0-9._-]+$/);
+  assert.equal(body.records, undefined);
+
+  const later = get(`from=${from}&to=${now + 60000}`).body.coverage;
+  assert.equal(later.to, now);
+  assert.equal(later.complete, false);
+});
+
+test('report-data rejects bad periods and marks truncated channels incomplete', t => {
+  const now = 1800000000000;
+  t.mock.method(Date, 'now', () => now);
+  const msgs = Array.from({ length: 600 }, (_, i) => ({ id: i + 1, ts: now - 600000 + i * 1000, channel: 'bygge', from: 'a', text: 'hej' }));
+  const get = reportSetup(msgs);
+  for (const q of ['', 'from=abc&to=1', `from=${now}&to=${now}`, `from=0&to=${25 * 3600000}`]) {
+    const { code, body } = get(q);
+    assert.equal(code, 400);
+    assert.equal(typeof body.error, 'string');
+  }
+  const { body } = get(`from=${now - 3600000}&to=${now}`);
+  assert.equal(body.coverage.complete, false);
+  assert.equal(body.coverage.from, now - 600000 + 100 * 1000);
+  assert.match(body.coverage.note, /500 senaste/);
+  assert.equal(body.metrics.find(x => x.key === 'messages_assessed').value, 500);
+});

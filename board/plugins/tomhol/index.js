@@ -149,6 +149,80 @@ function assess(messages, kanal, now, team, previous) {
   };
 }
 
+// Rapportörens kontrakt V1 (projects/fralle/RAPPORT_API.md): observed text signals for [from, to).
+const REPORT_MAX_MS = 24 * 60 * 60 * 1000;
+const PAGE = 500;
+
+function report(ctx, st, from, to, now) {
+  const signaler = { fragor: 0, hinder: 0, uppskattning: 0, omtanke: 0 };
+  let assessed = 0;
+  let coverageFrom = from;
+  const active = new Set();
+  const truncated = [];
+  for (const c of ctx.board.channels()) {
+    if (SKIP_CHANNELS.has(c.channel) || c.last_ts < from) continue;
+    const messages = ctx.board.query({ channel: c.channel, limit: PAGE });
+    const oldest = messages.reduce((ts, m) => Math.min(ts, m.ts), Infinity);
+    if (c.count > messages.length && oldest >= from) {
+      truncated.push(c.channel);
+      coverageFrom = Math.max(coverageFrom, oldest);
+    }
+    for (const m of messages) {
+      if (!Number.isFinite(m.ts) || m.ts < from || m.ts >= to || typeof m.text !== 'string' || automated(m, ctx.team)) continue;
+      assessed++;
+      active.add(m.channel);
+      for (const { signal } of signals(m)) signaler[signal]++;
+    }
+  }
+  let emitted = null;
+  if (typeof ctx.board.events === 'function') {
+    emitted = ctx.board.events(Number.MAX_SAFE_INTEGER)
+      .filter(e => e.kvarter === ctx.team && e.typ === 'stämning.byte' && e.ts >= from && e.ts < to).length;
+  }
+  const coverageTo = Math.min(to, now);
+  const future = from >= now;
+  const notes = [
+    'Uttryckliga språksignaler i Torgets sparade inlägg, inte personers känslor.',
+    'Automatiska svar (Kollegan:, Lotsen: m.fl.), tomhols egna inlägg och #stadens-saga, #radio och #kollegan-events räknas inte.',
+  ];
+  if (truncated.length) notes.push(`Bara de ${PAGE} senaste inläggen per kanal kan läsas; täckningen börjar senare för #${truncated.join(', #')}.`);
+  if (to > now) notes.push('Perioden slutar efter generated_at.');
+  if (emitted === null) notes.push('Bussen gick inte att läsa; stämning.byte-utskick är okända.');
+  const metric = (key, label, value, unit, scope = 'period') => ({ key, label, value, unit, scope });
+  return {
+    schema_version: 1,
+    team: ctx.team,
+    capability: 'Stämningen',
+    generated_at: now,
+    period: { from, to },
+    coverage: {
+      from: future ? null : coverageFrom,
+      to: future ? null : coverageTo,
+      complete: !future && !truncated.length && to <= now && emitted !== null,
+      note: notes.join(' '),
+    },
+    metrics: [
+      metric('messages_assessed', 'Bedömda inlägg', assessed, 'count'),
+      metric('channels_assessed', 'Kanaler med bedömda inlägg', active.size, 'count'),
+      metric('signals.questions', 'Frågesignaler', signaler.fragor, 'count'),
+      metric('signals.obstacles', 'Hindersignaler', signaler.hinder, 'count'),
+      metric('signals.appreciation', 'Uppskattningssignaler', signaler.uppskattning, 'count'),
+      metric('signals.care', 'Uttryck av omtanke', signaler.omtanke, 'count'),
+      metric('stamning_byte_emitted', 'Skickade stämning.byte', emitted, 'count'),
+      metric('paused', 'Pausad just nu (1 = ja)', st.pausad ? 1 : 0, 'boolean', 'snapshot'),
+    ],
+  };
+}
+
+function reportParams(url) {
+  const from = Number(url.searchParams.get('from'));
+  const to = Number(url.searchParams.get('to'));
+  if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0) return { error: 'from och to måste vara heltal i epoch-ms.' };
+  if (from >= to) return { error: 'from måste vara mindre än to.' };
+  if (to - from > REPORT_MAX_MS) return { error: 'Perioden får vara högst 24 timmar.' };
+  return { from, to };
+}
+
 module.exports = {
   init(ctx) { state(ctx); },
 
@@ -224,8 +298,24 @@ module.exports = {
   },
 
   handle(req, res, ctx) {
-    if (req.method !== 'GET' || !['/status', '/timeline'].includes(ctx.path)) return false;
+    if (req.method !== 'GET' || !['/status', '/timeline', '/report-data'].includes(ctx.path)) return false;
     const st = state(ctx);
+    if (ctx.path === '/report-data') {
+      const params = reportParams(ctx.url);
+      let body = params;
+      let code = params.error ? 400 : 200;
+      if (!params.error) {
+        try {
+          body = report(ctx, st, params.from, params.to, Date.now());
+        } catch (err) {
+          code = 500;
+          body = { error: `Rapportdata kunde inte sammanställas: ${err.message}` };
+        }
+      }
+      res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(body));
+      return true;
+    }
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     if (ctx.path === '/timeline') {
       res.end(JSON.stringify(timeline(st, Date.now())));
