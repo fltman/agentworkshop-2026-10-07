@@ -1,5 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { createReporter, parsePeriod } = require('./report');
+const { queueReport } = require('./report-sources');
+const reporter = createReporter();
 
 const ROLES = [
   { name: 'Örat', words: ['orat', 'ear', 'lyssna', 'mention'] },
@@ -344,6 +347,28 @@ function accept(event, { board, team }) {
   dispatch(item, { board, team });
 }
 
+function statusData(board) {
+  const active = queue();
+  return {
+    förmåga: 'Kön', team: 'fralle', error: storageError, förmågor: capabilities(board),
+    kö: active, besvarade: state.questions.filter(item => item.status === 'besvarad').slice(-20).reverse(),
+    återkallade: state.questions.filter(item => item.status === 'återkallad').slice(-20).reverse(),
+    statistik: {
+      aktiva: active.length, väntande: active.filter(item => item.steg === 'väntar').length,
+      påbörjade: active.filter(item => item.steg === 'påbörjad').length,
+      granskning: active.filter(item => ['väntar på granskning', 'granskat'].includes(item.steg)).length,
+      äldsta_väntetid_sek: Math.max(0, ...active.map(item => item.väntetid_sek)),
+      frågare: new Set(active.map(item => requesterKey(item.frågare))).size,
+      senaste_reservation: state.lastClaim,
+      parkerade: active.filter(item => item.parkerad_ts !== undefined).length,
+      parkering_gräns_sek: PARK_TIME / 1000,
+      utan_framsteg: active.filter(item => item.uppmärksamhet).length,
+      utan_framsteg_gräns_sek: STALL_TIME / 1000,
+    },
+    fel: state.errors,
+  };
+}
+
 function next(now = Date.now()) {
   if (state.questions.some(item => item.status === 'väntar' && item.reservation)) return null;
   return queue(now).find(item => item.parkerad_ts === undefined) || null;
@@ -407,6 +432,7 @@ async function claim(req, res, context) {
 
 module.exports = {
   init({ dataDir, board, team }) {
+    reporter.reset();
     if (timer) clearInterval(timer);
     file = path.join(dataDir, 'queue.json');
     storageError = null;
@@ -493,6 +519,20 @@ module.exports = {
 
   handle(req, res, context) {
     const { path, board } = context;
+    if (req.method === 'GET' && path === '/report') {
+      return reporter.get(req, context.url?.searchParams || new URLSearchParams()).then(report =>
+        json(res, report.status === 'unavailable' ? 503 : 200, report)).catch(error => {
+        console.error('[fralle] Rapportören:', error.message);
+        return json(res, error.status === 400 ? 400 : 500, { error: error.message });
+      });
+    }
+    if (req.method === 'GET' && path === '/report-data') {
+      let period;
+      try { period = parsePeriod(context.url?.searchParams || new URLSearchParams()); }
+      catch (error) { return json(res, 400, { error: error.message }); }
+      if (storageError) return json(res, 503, { error: storageError });
+      return json(res, 200, queueReport(statusData(board), period));
+    }
     if (req.method === 'POST' && path === '/claim') return claim(req, res, context).catch(error => {
       report(null, error);
       return json(res, storageError ? 503 : 500, { error: error.message });
@@ -504,28 +544,11 @@ module.exports = {
     if (path === '/next') return json(res, 200, {
       fråga: next(), upptagen: state.questions.some(item => item.status === 'väntar' && item.reservation),
     });
-    const active = queue();
-    return json(res, 200, {
-      förmåga: 'Kön', team: 'fralle', error: storageError, förmågor: capabilities(board),
-      kö: active, besvarade: state.questions.filter(item => item.status === 'besvarad').slice(-20).reverse(),
-      återkallade: state.questions.filter(item => item.status === 'återkallad').slice(-20).reverse(),
-      statistik: {
-        aktiva: active.length, väntande: active.filter(item => item.steg === 'väntar').length,
-        påbörjade: active.filter(item => item.steg === 'påbörjad').length,
-        granskning: active.filter(item => ['väntar på granskning', 'granskat'].includes(item.steg)).length,
-        äldsta_väntetid_sek: Math.max(0, ...active.map(item => item.väntetid_sek)),
-        frågare: new Set(active.map(item => requesterKey(item.frågare))).size,
-        senaste_reservation: state.lastClaim,
-        parkerade: active.filter(item => item.parkerad_ts !== undefined).length,
-        parkering_gräns_sek: PARK_TIME / 1000,
-        utan_framsteg: active.filter(item => item.uppmärksamhet).length,
-        utan_framsteg_gräns_sek: STALL_TIME / 1000,
-      },
-      fel: state.errors,
-    });
+    return json(res, 200, statusData(board));
   },
 
   onEvent(event, context) {
+    if (event.kvarter !== context.team) reporter.invalidate();
     if (event.kvarter === context.team || !['fråga.ny', ...LIFECYCLE].includes(event.typ)) return;
     try {
       if (storageError) throw new Error('Köns lagring är otillgänglig: ' + storageError);

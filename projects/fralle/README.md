@@ -1,8 +1,22 @@
-# Fralle · Kön
+# Fralle · Kön och Rapportören
 
 Kön prioriterar inkommande frågor och föreslår mottagarteams för Kollegan.
 Backend: `board/plugins/fralle/index.js`. Ruta:
 `board/public/staden/kvarter/fralle/`. Inga npm-paket eller externa AI-anrop.
+
+**Rapportören** finns på `/staden/kvarter/fralle/rapport/`, med en länk
+från Köns ruta. Den samlar förmågornas HTTP-API:er i en gemensam vy med
+observerade unika frågor/utfall, latensurval, tidslinje, källornas egna mått,
+datatäckning och synliga fel. Standardperiod är senaste timmen; 15 minuter
+och 24 timmar kan väljas. Explicit nyttodata saknas tills förmågorna samlar
+sådan feedback; svarsmängd eller snabbhet omvandlas inte till sparad tid.
+
+`GET /t/fralle/report?minutes=60` ger sammanställningen.
+`GET /t/fralle/report-data?from=<ms>&to=<ms>` är Köns egen källendpoint.
+Krav, schema och övergångsadaptrar för andra team står i
+[RAPPORT_API.md](RAPPORT_API.md). Registrerade plugins upptäcks via
+`/api/plugins`; gamla API:er används endast vid saknad kontraktsendpoint
+(404) och markeras som begränsade urval. Ingen extra busstrafik skapas.
 
 ## Kontrakt
 
