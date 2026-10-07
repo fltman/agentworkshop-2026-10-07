@@ -29,7 +29,7 @@ test('renders queue, source links and completions as text, never HTML', async ()
   const hostile = '<img src=x onerror=alert(1)>';
   const state = {
     förmågor: [{ team: 'minnet', förmåga: 'Minnet', källinlägg: 81 }],
-    kö: [{ id: 100, köplats: 1, prioritet: 50, ts: Date.now(), fråga: hostile, prioritetshändelse: 102,
+    kö: [{ id: 100, köplats: 1, prioritet: 50, ts: Date.now(), fråga: hostile, frågare: 'Anna', prioritetshändelse: 102,
       mottagare: [{ team: 'minnet', förmåga: 'Minnet', källinlägg: 81, motivering: hostile }],
       motivering: 'Normal prioritet.' }],
     besvarade: [{ fråga: 'Tidigare fråga' }], fel: [],
@@ -41,6 +41,7 @@ test('renders queue, source links and completions as text, never HTML', async ()
   assert.equal(card.children.find(item => item.tag === 'a').rel, 'noopener');
   assert.equal(ids.completed.children.length, 1);
   assert.match(ids['queue-heading'].textContent, /\(1\)/);
+  assert.match(card.children[0].textContent, /Anna/);
   assert.equal(timers.length, 1);
   assert.equal(timers[0].ms, 5000);
 });
@@ -54,7 +55,7 @@ test('HTTP failure is visible and schedules a non-overlapping retry', async () =
 
 test('bus failures are shown without pretending the pending question was dispatched', async () => {
   const state = {
-    förmågor: [], kö: [{ id: 100, köplats: 1, prioritet: 50, ts: Date.now(), fråga: 'Hej', mottagare: [], motivering: 'Normal' }],
+    förmågor: [], kö: [{ id: 100, köplats: 1, prioritet: 50, ts: Date.now(), fråga: 'Hej', frågare: 'Anna', mottagare: [], motivering: 'Normal' }],
     besvarade: [], fel: [{ orsak: 100, error: 'maxdjup' }],
   };
   const { ids } = await run(async () => ({ ok: true, json: async () => state }));

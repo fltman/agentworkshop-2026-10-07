@@ -54,6 +54,18 @@ const noder = new Map();           // kvarter -> nod
 const kanter = new Map();          // "a→b" -> {a, b, antal, glod}
 const handelser = new Map();       // id -> {e, rot}
 const pulser = [], ringar = [], ko = [];
+// Ateljéns porträtt: varje förmåga får sin byggnad i noden. Hämtas om var trettionde sekund.
+const portratt = new Map();   // kvarter -> Image
+async function hamtaPortratt() {
+  try {
+    for (const b of await fetch('/t/ateljen/lista').then(r => r.json())) {
+      if (b.typ !== 'portratt' || portratt.has(b.kvarter + b.ts)) continue;
+      const img = new Image(); img.src = b.url + '?v=' + b.ts;
+      img.onload = () => { portratt.set(b.kvarter, img); portratt.set(b.kvarter + b.ts, true); };
+    }
+  } catch (e) {}
+}
+hamtaPortratt(); setInterval(hamtaPortratt, 30000);
 let senasteRot = null, langst = 0;
 
 function nod(namn) {
@@ -146,16 +158,19 @@ function rita(nu) {
   g.fillText('TORGET', TORGET.x, TORGET.y + 4);
 
   for (const n of noder.values()) {
-    const r = Math.min(34, 13 + Math.sqrt(n.antal) * 2.4);
+    const bild = portratt.get(n.namn);
+    const r = bild ? Math.min(46, 30 + Math.sqrt(n.antal) * 1.5) : Math.min(34, 13 + Math.sqrt(n.antal) * 2.4);
     g.save(); g.shadowBlur = 10 + n.glod * 40; g.shadowColor = farg(n.namn);
-    g.beginPath(); g.arc(n.x, n.y, r, 0, 7); g.fillStyle = '#0b0e13'; g.fill();
-    g.lineWidth = 2 + n.glod * 2; g.strokeStyle = farg(n.namn, 0.55 + n.glod * 0.45); g.stroke(); g.restore();
+    g.beginPath(); g.arc(n.x, n.y, r, 0, 7); g.fillStyle = '#0b0e13'; g.fill(); g.restore();
+    if (bild) { g.save(); g.beginPath(); g.arc(n.x, n.y, r - 1, 0, 7); g.clip(); g.drawImage(bild, n.x - r, n.y - r, r * 2, r * 2); g.restore(); }
+    g.beginPath(); g.arc(n.x, n.y, r, 0, 7);
+    g.lineWidth = 2 + n.glod * 3; g.strokeStyle = farg(n.namn, 0.55 + n.glod * 0.45); g.stroke();
     const vanligast = [...n.typer.entries()].sort((a, b) => b[1] - a[1])[0];
     g.textAlign = 'center';
     g.fillStyle = '#e6e8eb'; g.font = '600 13px ui-monospace, Menlo, monospace'; g.fillText(n.namn, n.x, n.y + r + 16);
     g.fillStyle = farg(n.namn, 0.9); g.font = '12px ui-monospace, Menlo, monospace';
     g.fillText(vanligast ? formaga(vanligast[0]) : '', n.x, n.y + r + 31);
-    g.fillStyle = '#7d8590'; g.font = '11px ui-monospace, Menlo, monospace'; g.fillText(String(n.antal), n.x, n.y + 4);
+    if (!bild) { g.fillStyle = '#7d8590'; g.font = '11px ui-monospace, Menlo, monospace'; g.fillText(String(n.antal), n.x, n.y + 4); }
   }
   g.textAlign = 'left';
   requestAnimationFrame(rita);

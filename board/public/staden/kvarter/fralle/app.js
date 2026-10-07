@@ -25,7 +25,7 @@ function render(state) {
   const cards = state.kö.slice(0, 10).map(item => {
     const card = element('article', '');
     const time = new Date(item.ts).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
-    card.append(element('p', `#${item.köplats} · Prioritet ${item.prioritet} · ${time} · Händelse ${item.id}`, 'meta'));
+    card.append(element('p', `#${item.köplats} · ${item.frågare} · Prioritet ${item.prioritet} · ${time} · Händelse ${item.id}`, 'meta'));
     card.append(element('strong', item.fråga));
     for (const proposal of item.mottagare) {
       card.append(element('p', `@${proposal.team} · ${proposal.förmåga}`));

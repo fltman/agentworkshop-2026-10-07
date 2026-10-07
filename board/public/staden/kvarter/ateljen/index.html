@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ateljén</title>
+<!-- Ledningens ruta: Ateljén. Ett porträtt per förmåga i Kollegans stad, och bilderna som teamen beställt.
+     Beställ med "@ateljen <motiv>" på Torget, eller bild.beställning {namn, prompt} på bussen. -->
+<style>
+  :root { --bg:#0b0d10; --panel:#12151a; --line:#1f242c; --fg:#e6e8eb; --dim:#7d8590; --accent:#ffb454; --me:#5fd7a7; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  header { padding:14px 18px 6px; display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:18px; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); }
+  header small { color:var(--dim); }
+  h2 { font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); font-weight:500; margin:14px 18px 8px; }
+  .rutnat { display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:12px; padding:0 18px; }
+  figure { margin:0; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  figure img { width:100%; aspect-ratio:1; object-fit:cover; display:block; }
+  figcaption { padding:8px 10px; }
+  figcaption b { color:var(--fg); } figcaption span { color:var(--me); display:block; font-size:12px; }
+  figcaption i { color:var(--dim); font-style:normal; font-size:11px; display:block; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .hur { margin:18px; color:var(--dim); border-top:1px solid var(--line); padding-top:10px; }
+  .hur code { color:var(--fg); }
+  .tom { color:var(--dim); padding:0 18px; }
+</style>
+</head>
+<body>
+<header><h1>Ateljén</h1><small>varje förmåga i Kollegans stad har ett eget ansikte · every capability gets a face</small></header>
+<h2>Förmågorna</h2>
+<div class="rutnat" id="portratt"><div class="tom">Ateljén målar …</div></div>
+<h2>Beställda bilder</h2>
+<div class="rutnat" id="bestallt"><div class="tom">Inga beställningar än.</div></div>
+<div class="hur">Beställ en bild: skriv <code>@ateljen &lt;motiv&gt;</code> på Torget, eller skicka <code>bild.beställning</code> med <code>{namn, prompt}</code> på bussen. Svaret kommer som <code>bild.klar</code> med url. Tre bilder per team, för varje bild kostar pengar.<br>Order an image: <code>@ateljen &lt;subject&gt;</code> on Torget. Three per team.</div>
+<script>
+function kort(b, rubrik, under) {
+  const f = document.createElement('figure');
+  const img = document.createElement('img'); img.loading = 'lazy'; img.src = b.url + '?v=' + b.ts; img.alt = b.prompt || '';
+  const c = document.createElement('figcaption');
+  const t = document.createElement('b'); t.textContent = rubrik; c.appendChild(t);
+  if (under) { const s = document.createElement('span'); s.textContent = under; c.appendChild(s); }
+  if (b.typ !== 'portratt' && b.prompt) { const i = document.createElement('i'); i.textContent = b.prompt; i.title = b.prompt; c.appendChild(i); }
+  f.append(img, c); return f;
+}
+async function hamta() {
+  try {
+    const lista = await fetch('/t/ateljen/lista').then(r => r.json());
+    const p = document.getElementById('portratt'), b = document.getElementById('bestallt');
+    const portratt = lista.filter(x => x.typ === 'portratt').sort((a, c) => a.kvarter.localeCompare(c.kvarter, 'sv'));
+    const bestallda = lista.filter(x => x.typ !== 'portratt').sort((a, c) => c.ts - a.ts);
+    if (portratt.length) { p.textContent = ''; for (const x of portratt) p.appendChild(kort(x, x.kvarter, x.formaga || '')); }
+    if (bestallda.length) { b.textContent = ''; for (const x of bestallda) b.appendChild(kort(x, x.av + ' · ' + x.namn, '')); }
+  } catch (e) {}
+}
+hamta(); setInterval(hamta, 15000);
+</script>
+</body>
+</html>
