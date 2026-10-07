@@ -71,6 +71,23 @@ const VÄNTA_LÄNGRE_MS = 4000;          // frågor om sammanfattningar: Mötet 
 const VÄNTA_PÅ_GRANSKNING_MS = 20000;  // postar ett ogranskat svar om Granskaren uteblir
 const MAX_HISTORIK = 30;
 
+// Bussens tak är 6 händelser/min/kvarter. Varje svar vi ger är 2 händelser (svar.utkast + svar.klart),
+// så vid fler än 3 frågor/min nekar servern och vi tappade förut svaret tyst. Samma mönster som
+// holminator löste det i Minnet v5 (#bygge 758): försök igen några gånger med paus i stället för
+// att ge upp direkt.
+const EMIT_ÅTERFÖRSÖK = 3;
+const EMIT_VÄNTA_MS = 4000;
+
+async function emitMedÅterförsök(board, typ, opts) {
+  let resultat = board.emit(typ, opts);
+  for (let försök = 0; försök < EMIT_ÅTERFÖRSÖK && resultat && resultat.error && /per minut/.test(resultat.error); försök++) {
+    await new Promise((klar) => { const t = setTimeout(klar, EMIT_VÄNTA_MS); if (t.unref) t.unref(); });
+    resultat = board.emit(typ, opts);
+  }
+  if (resultat && resultat.error) console.error('[mikael] emit', typ, resultat.error);
+  return resultat;
+}
+
 // Modulens eget minne. Ett plugin laddas en gång per serverprocess, så vanliga variabler räcker.
 const pending = new Map();          // fråga.ny id -> { fråga, inlägg, kanal, kunskap: [{källa, text, id}] }
 const utkastTillFråga = new Map();  // svar.utkast id -> fråga.ny id
@@ -150,7 +167,7 @@ async function publiceraGranskatSvar(frågaId, e, board) {
   const hälsning = post.frågare ? `Kollegan: @${post.frågare}, ` : 'Kollegan: ';
 
   board.post(`${hälsning}${text}`, post.kanal, post.inlägg);
-  board.emit('svar.klart', { orsak: e.id, styrka, nyttolast: { fråga: post.fråga, fråga_id: frågaId, inlägg: post.inlägg } });
+  await emitMedÅterförsök(board, 'svar.klart', { orsak: e.id, styrka, nyttolast: { fråga: post.fråga, fråga_id: frågaId, inlägg: post.inlägg } });
 
   historik.push({ fråga: post.fråga, svar: text, styrka, ts: Date.now() });
   if (historik.length > MAX_HISTORIK) historik.shift();
@@ -205,22 +222,23 @@ function formuleraSvar(frågaId, board) {
   }
   post.svarstext = svarstext;
 
-  const resultat = board.emit('svar.utkast', {
+  emitMedÅterförsök(board, 'svar.utkast', {
     orsak: frågaId,
     styrka,
     nyttolast: { fråga: post.fråga, fråga_id: frågaId, svar: svarstext, kanal: post.kanal, inlägg: post.inlägg },
-  });
-  const utkastId = resultat && resultat.handelse && resultat.handelse.id;
-  if (!utkastId) return;
-  utkastTillFråga.set(utkastId, frågaId);
+  }).then((resultat) => {
+    const utkastId = resultat && resultat.handelse && resultat.handelse.id;
+    if (!utkastId) return;
+    utkastTillFråga.set(utkastId, frågaId);
 
-  // Granskaren kan vara nere eller sakna kapacitet: posta ett ogranskat svar hellre än inget alls.
-  const timer = setTimeout(() => {
-    try { postaOgranskat(frågaId, utkastId, board); }
-    catch (err) { console.error('[mikael] kunde inte posta ogranskat svar', err && err.message); }
-  }, VÄNTA_PÅ_GRANSKNING_MS);
-  if (timer.unref) timer.unref();
-  post.granskningsTimer = timer;
+    // Granskaren kan vara nere eller sakna kapacitet: posta ett ogranskat svar hellre än inget alls.
+    const timer = setTimeout(() => {
+      try { postaOgranskat(frågaId, utkastId, board); }
+      catch (err) { console.error('[mikael] kunde inte posta ogranskat svar', err && err.message); }
+    }, VÄNTA_PÅ_GRANSKNING_MS);
+    if (timer.unref) timer.unref();
+    post.granskningsTimer = timer;
+  }).catch((err) => console.error('[mikael] kunde inte skicka svar.utkast', err && err.message));
 }
 
 function postaOgranskat(frågaId, utkastId, board) {
@@ -228,14 +246,14 @@ function postaOgranskat(frågaId, utkastId, board) {
   if (!post) return; // redan besvarad via svar.granskat, eller borttagen
 
   fårPublicera(frågaId)
-    .then((ok) => {
+    .then(async (ok) => {
       const post2 = pending.get(frågaId);
       if (!post2) return; // hanterad under tiden
       if (!ok) { pending.delete(frågaId); return; } // nekad förnyelse: publicera inte
 
       const hälsning = post2.frågare ? `Kollegan: @${post2.frågare}, ` : 'Kollegan: ';
       board.post(`${hälsning}(ogranskat) ${post2.svarstext}`, post2.kanal, post2.inlägg);
-      board.emit('svar.klart', { orsak: utkastId, nyttolast: { fråga: post2.fråga, fråga_id: frågaId, inlägg: post2.inlägg } });
+      await emitMedÅterförsök(board, 'svar.klart', { orsak: utkastId, nyttolast: { fråga: post2.fråga, fråga_id: frågaId, inlägg: post2.inlägg } });
 
       historik.push({ fråga: post2.fråga, svar: `(ogranskat) ${post2.svarstext}`, styrka: null, ts: Date.now() });
       if (historik.length > MAX_HISTORIK) historik.shift();
