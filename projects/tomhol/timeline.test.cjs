@@ -157,8 +157,141 @@ test('timeline renders safe source details and clipped-peak counts, respects red
   failed = true;
   await scheduled();
   assert.match(containers['timeline-status'].textContent, /offline/);
+  assert.match(containers['timeline-status'].textContent, /lyckade hämtning för 5 s/);
+  assert.doesNotMatch(containers['timeline-status'].textContent, /Ansluten/);
   assert.equal(containers.timelines.children[0], article);
+  motion.matches = false;
+  listeners.motion();
+  clock = 17000;
+  animationCallback();
+  assert.match(containers['timeline-status'].textContent, /offline/);
+  assert.match(containers['timeline-status'].textContent, /lyckade hämtning för 16 s/);
+  assert.match(containers['timeline-status'].textContent, /Underlaget är inaktuellt/);
+  assert.doesNotMatch(containers['timeline-status'].textContent, /Ansluten/);
+  motion.matches = true;
+  listeners.motion();
+  failed = false;
+  await scheduled();
+  assert.match(containers['timeline-status'].textContent, /Ansluten/);
+  assert.match(containers['timeline-status'].textContent, /lyckade hämtning för 0 s/);
+  assert.doesNotMatch(containers['timeline-status'].textContent, /offline|inaktuellt|Hämtningsfel/);
   context.document.hidden = true;
   await scheduled();
-  assert.equal(animations, 2);
+  assert.equal(animations, 4);
+});
+
+test('diff finds new appreciation/care markers after the baseline and cheer respects opt-in and cooldown', () => {
+  const now = 1800000000000;
+  const data = markers => ({ kanaler: [{ kanal: 'bygge', markorer: markers }] });
+  const a = { ts: now - 2000, inlagg: 1, signal: 'fragor' };
+  const b = { ts: now - 1000, inlagg: 2, signal: 'uppskattning' };
+  const c = { ts: now, inlagg: 3, signal: 'omtanke' };
+  const first = graph.diff(null, data([a, b]));
+  assert.equal(first.fresh.size, 0);
+  assert.equal(first.positive, 0);
+  const second = graph.diff(first.keys, data([b, c]));
+  assert.deepEqual([...second.fresh], [graph.markerKey('bygge', c)]);
+  assert.equal(second.positive, 1);
+  assert.deepEqual([...second.hearts], ['bygge']);
+  assert.equal(graph.diff(second.keys, data([b, c])).positive, 0);
+  assert.equal(graph.diff(second.keys, data([b, c, { ts: now, inlagg: 4, signal: 'hinder' }])).positive, 0);
+
+  const voice = { enabled: false, lastAt: -Infinity };
+  assert.equal(graph.shouldCheer(voice, 0, 3), false);
+  voice.enabled = true;
+  assert.equal(graph.shouldCheer(voice, 0, 0), false);
+  assert.equal(graph.shouldCheer(voice, 0, 1), true);
+  assert.equal(graph.shouldCheer(voice, 29999, 1), false);
+  assert.equal(graph.shouldCheer(voice, 30000, 2), true);
+});
+
+test('tile pops new emojis, pulses the peak, floats hearts and says the cheer only after opt-in', async () => {
+  const now = 1800000000000;
+  const containers = { timelines: element('section'), 'timeline-status': element('p'), sound: element('button') };
+  containers.sound.addEventListener = (event, cb) => { containers.sound.click = cb; };
+  const listeners = {};
+  let scheduled, clock = 1000;
+  const motion = { matches: false, addEventListener(event, cb) { listeners.motion = cb; } };
+  const spoken = [];
+  let cancels = 0;
+  let markorer = [{ ts: now - 5000, inlagg: 1, signal: 'fragor', uttryck: 'why' }];
+  const payload = () => ({
+    till: now, fran: now - 600000, tackningFran: now - 600000, intervallMs: 10000, maxSkala: 10,
+    kanaler: [{ kanal: 'bygge', intervall: [{ ts: now - 20000, antal: 2 }, { ts: now - 10000, antal: 5 }], markorer }],
+  });
+  const context = {
+    document: {
+      hidden: false, getElementById: id => containers[id],
+      createElement: element, createElementNS: (_, tag) => element(tag),
+      addEventListener: (event, cb) => { listeners[event] = cb; },
+    },
+    window: {
+      matchMedia: () => motion,
+      speechSynthesis: { speak: u => spoken.push(u), cancel() { cancels++; } },
+      SpeechSynthesisUtterance: function (text) { this.text = text; },
+    },
+    performance: { now: () => clock },
+    Date, AbortSignal,
+    requestAnimationFrame: () => 1, cancelAnimationFrame() {},
+    setTimeout: cb => { scheduled = cb; },
+    fetch: async () => ({ ok: true, json: async () => payload() }),
+  };
+  const code = fs.readFileSync(path.resolve(__dirname, '../../board/public/staden/kvarter/tomhol/timeline.js'), 'utf8');
+  vm.runInNewContext(code, context);
+  await new Promise(resolve => setImmediate(resolve));
+  const texts = () => containers.timelines.querySelectorAll('text');
+  const article = () => containers.timelines.children[0];
+  assert.equal(texts().some(t => t.attributes.class === 'pop'), false, 'baseline does not pop');
+  const dots = containers.timelines.querySelectorAll('circle');
+  assert.deepEqual(dots.map(d => d.attributes.class), [undefined, 'peak']);
+
+  markorer = [...markorer, { ts: now - 1000, inlagg: 2, signal: 'omtanke', uttryck: '❤️' }];
+  await scheduled();
+  assert.deepEqual(texts().filter(t => t.attributes.class === 'pop').map(t => t.textContent), ['❤️']);
+  assert.ok(article().children.some(c => c.attributes.class === 'float-heart'));
+  assert.equal(spoken.length, 0, 'silent before opt-in');
+
+  containers.sound.click();
+  assert.equal(containers.sound.attributes['aria-pressed'], 'true');
+  assert.deepEqual(spoken.map(u => u.text), ['Bra jobbat, gubbar!'], 'speaks inside the click gesture to unlock speech');
+  spoken[0].onerror({ error: 'not-allowed' });
+  assert.match(containers.sound.textContent, /talsyntesfel: not-allowed/);
+  spoken.length = 0;
+  markorer = [...markorer, { ts: now, inlagg: 3, signal: 'uppskattning', uttryck: 'tack' }];
+  clock = 31000;
+  await scheduled();
+  assert.deepEqual(spoken.map(u => u.text), ['Bra jobbat, gubbar!']);
+  assert.ok(cancels >= 2, 'clears a stuck queue before speaking');
+  assert.equal(article().children.some(c => c.attributes.class === 'float-heart'), false);
+
+  markorer = [...markorer, { ts: now, inlagg: 4, signal: 'omtanke', uttryck: '❤️' }];
+  clock = 60999;
+  await scheduled();
+  assert.equal(spoken.length, 1, 'cooldown holds');
+
+  motion.matches = true;
+  markorer = [...markorer, { ts: now, inlagg: 5, signal: 'omtanke', uttryck: '❤️' }];
+  clock = 61000;
+  await scheduled();
+  assert.equal(spoken.length, 2, 'voice still works with reduced motion');
+  assert.equal(texts().some(t => t.attributes.class === 'pop'), false);
+  assert.equal(article().children.some(c => c.attributes.class === 'float-heart'), false);
+
+  containers.sound.click();
+  markorer = [...markorer, { ts: now, inlagg: 6, signal: 'omtanke', uttryck: '❤️' }];
+  clock = 100000;
+  await scheduled();
+  assert.equal(spoken.length, 2, 'silent after opt-out');
+});
+
+test('pickVoice prefers known female Swedish voices with a raised pitch', () => {
+  const alva = { name: 'Alva', lang: 'sv-SE' };
+  const hedvig = { name: 'Microsoft Hedvig - Swedish (Sweden)', lang: 'sv-SE' };
+  const oskar = { name: 'Oskar', lang: 'sv-SE' };
+  const en = { name: 'Samantha', lang: 'en-US' };
+  assert.deepEqual(graph.pickVoice([en, oskar, alva]), { voice: alva, pitch: 1.6 });
+  assert.deepEqual(graph.pickVoice([oskar, hedvig]), { voice: hedvig, pitch: 1.6 });
+  assert.deepEqual(graph.pickVoice([en, oskar]), { voice: oskar, pitch: 1.6 });
+  assert.deepEqual(graph.pickVoice([en]), { voice: null, pitch: 1.6 });
+  assert.equal(graph.phrase, 'Bra jobbat, gubbar!');
 });

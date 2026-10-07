@@ -10,11 +10,21 @@
   .note { color: #cbd5e1; } #error { color: #fca5a5; } a { color: #93c5fd; }
   svg { width: 100%; display: block; overflow: hidden; }
   summary { cursor: pointer; } details p { overflow-wrap: anywhere; }
+  article { position: relative; }
+  button { font: inherit; background: #1f2937; color: #e5e7eb; border: 1px solid #4b5563; border-radius: 8px; padding: 4px 10px; cursor: pointer; }
+  .pop { animation: pop .3s ease-out; transform-box: fill-box; transform-origin: center; }
+  @keyframes pop { 0% { transform: scale(0); } 70% { transform: scale(1.4); } 100% { transform: scale(1); } }
+  .peak { animation: glow 1.2s ease-in-out infinite; }
+  @keyframes glow { 50% { opacity: .4; filter: drop-shadow(0 0 6px #67e8f9); } }
+  .float-heart { position: absolute; right: 20px; bottom: 40px; font-size: 26px; pointer-events: none; animation: float 2s ease-out forwards; }
+  @keyframes float { from { transform: translateY(0); opacity: 1; } to { transform: translateY(-90px); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .pop, .peak { animation: none; } .float-heart { display: none; } }
 </style>
 <h1>Stämningen</h1>
 <p class="note">❓ Frågor · 🚧 Hinder · 🙌 Uppskattning · ❤️ Uttryckt omtanke – språksignaler, inte människors känslor.</p>
 <h2>Kanalernas rullande tidslinjer</h2>
 <p id="timeline-status" role="status">Hämtar tidslinjer…</p>
+<p><button id="sound" type="button" aria-pressed="false">🔇 ”Bra jobbat, gubbar!” av</button> <span class="note">En ljus kvinnoröst säger ”Bra jobbat, gubbar!” när uppskattning eller omtanke ökar, högst var 30:e sekund.</span></p>
 <p class="note">← Äldre (10 minuter) · Nutid → · Grå yta betyder okänt underlag, inte tystnad.</p>
 <section id="timelines" aria-label="Aktivitet per kanal"></section>
 <h2>Senaste bedömning från Pulsen</h2>

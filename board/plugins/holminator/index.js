@@ -396,14 +396,18 @@ function skickaSvar(ctx, opts, forsok = 0) {
 }
 
 function lasIn(ctx) {
-  let since = 0;
-  for (let i = 0; i < 100; i++) {
-    const sida = ctx.board.query({ since, limit: 500 });
-    if (!sida.length) break;
-    for (const m of sida) minnsPost(m, false);
-    since = sida[sida.length - 1].id;
-    if (sida.length < 500) break;
-  }
+  // Serverns query ger de SISTA `limit` inläggen efter since, aldrig de första. Bussens kopior i
+  // kollegan-events tränger annars undan morgonens anspråk, så vi läser varje kanal för sig.
+  const kanaler = typeof ctx.board.channels === 'function' ? ctx.board.channels().filter(c => c.channel !== BUSS) : [];
+  const sidor = kanaler.length
+    ? kanaler.map(c => {
+      if (c.count > 500) console.error('[holminator] init: #' + c.channel + ' har ' + c.count + ' inlägg, bara de senaste 500 läses');
+      return ctx.board.query({ channel: c.channel, limit: 500 });
+    })
+    : [ctx.board.query({ limit: 500 })];
+  const poster = new Map();
+  for (const sida of sidor) for (const m of sida) poster.set(m.id, m);
+  for (const m of [...poster.values()].sort((a, b) => a.id - b.id)) minnsPost(m, false);
   for (const e of ctx.board.events(MAX_HANDELSER)) {
     minnsHandelse(e);
     if (e.kvarter === ctx.team && e.typ === 'minne.träff' && e.orsak) {

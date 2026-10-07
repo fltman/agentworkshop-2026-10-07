@@ -15,7 +15,11 @@ function nyttMinne(poster = [], handelser = []) {
   const ctx = {
     team: 'holminator',
     board: {
-      query: ({ since = 0, limit = 500 }) => poster.filter(p => p.id > since).slice(0, limit),
+      // Som board/server.js: filtrera, ta sedan de SISTA `limit`.
+      query: ({ since = 0, limit = 500, channel }) =>
+        poster.filter(p => p.id > since && (!channel || p.channel === channel)).slice(-limit),
+      channels: () => [...new Set(poster.map(p => p.channel))]
+        .map(c => ({ channel: c, count: poster.filter(p => p.channel === c).length })),
       events: () => handelser,
       emit: (typ, o) => { const h = { id: nastaId++, ts: Date.now(), typ, kvarter: 'holminator', ...o }; skickat.push(h); return { handelse: h }; },
     },
@@ -84,6 +88,15 @@ test('fråga.ny besvaras med minne.träff, källor och styrka', () => {
   assert.ok(s.styrka >= 80);
   assert.ok(s.nyttolast.källor.length >= 1);
   assert.equal(s.nyttolast.inlägg, 999);
+});
+
+test('init minns morgonens anspråk även när bussens kopior är fler än en sida', () => {
+  // Live 11:17: 530 inlägg i kollegan-events efter anspråken; en sida (sista 500) missade dem helt.
+  const poster = torget();
+  for (let i = 0; i < 600; i++) poster.push(post('surret', 'kollegan-events', '{"typ":"puls.tryck"}'));
+  const m = nyttMinne(poster);
+  const s = m.fraga('vem bygger rösten?');
+  assert.match(s.nyttolast.svar, /mikael bygger Rösten/);
 });
 
 test('engelska frågor om förmågor', () => {
