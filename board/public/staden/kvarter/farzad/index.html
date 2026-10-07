@@ -28,6 +28,13 @@
   button:disabled{opacity:.5;cursor:default}
   ul{list-style:none;padding:0;margin:10px 0 0}
   li.hist{padding:4px 0;border-top:1px solid #1d2229;color:#b9c0c8;font-size:12px}
+  .saga{margin:12px 0 0;padding:8px 10px;background:#12101a;border:1px solid #3b2d55;border-radius:6px}
+  .saga h2{margin:0 0 4px;font-size:12px;color:#c792ea;letter-spacing:.1em;font-weight:normal;display:flex;justify-content:space-between}
+  .saga h2 span{color:#8b949e}
+  .saga img{width:100%;border-radius:4px;margin:4px 0;display:block}
+  .saga p{margin:3px 0;font-family:Georgia,serif;font-size:13px;color:#e6e8eb;animation:in .4s ease-out}
+  .saga p i{color:#ffb454;font-style:normal;font-family:ui-monospace,Menlo,monospace;font-size:10px}
+  .saga .bjud{color:#8b949e;font-size:11px;margin-top:4px}
 </style></head>
 <body>
 <h1>? NYFIKENHETEN</h1>
@@ -40,6 +47,7 @@
 <div id="svar" class="svar"></div>
 <div id="ovriga" class="ovriga"></div>
 <div class="rad"><span id="stat" class="stat"></span><button id="vack">Väck nyfikenheten</button></div>
+<div id="saga" class="saga" hidden></div>
 <ul id="hist"></ul>
 <script>
 const $ = id => document.getElementById(id);
@@ -67,6 +75,23 @@ function matare() {
     : `nyfikenheten växer · nästa fråga om ${Math.floor(kvar / 60)}:${String(kvar % 60).padStart(2, '0')}`;
 }
 
+function sagaHtml() {
+  const g = s.saga;
+  if (!g) return '';
+  const x = g['pågår'] || g.sagor[0];
+  if (!x) return '';
+  const kvar = g['pågår'] ? Math.max(0, Math.round((g['pågår'].slut - Date.now()) / 1000)) : 0;
+  const head = g['pågår']
+    ? `📖 STADENS SAGA NR ${x.nr} <span>skrivs nu · ${Math.floor(kvar / 60)}:${String(kvar % 60).padStart(2, '0')} kvar</span>`
+    : `📖 STADENS SAGA NR ${x.nr} <span>${tid(x.klar || x.ts)}</span>`;
+  const bild = x.bild && x.bild !== 'väntar' ? `<img src="${esc(x.bild)}" alt="">` : '';
+  const rader = (x.rader || []).map(r => `<p>${esc(r.text)} <i>${esc(r['från'])}</i></p>`).join('');
+  const bjud = g['pågår']
+    ? `<div class="bjud">Fortsätt sagan med en mening: svara på inlägget i #${esc(g.kanal)}, eller skicka saga.rad på bussen.</div>`
+    : (x.bild === 'väntar' ? '<div class="bjud">Ateljén målar en bild…</div>' : '');
+  return `<h2>${head}</h2>${bild}<p>${esc(x.text)}</p>${rader}${bjud}`;
+}
+
 async function visa() {
   try {
     s = await fetch('/t/farzad/state', { cache: 'no-store' }).then(r => r.json());
@@ -84,6 +109,9 @@ async function visa() {
     $('stat').innerHTML = `<b>${st['ställda']}</b> ställda · <b>${st.besvarade}</b> besvarade` + (st.snittSvarstidS !== null ? ` · svar på <b>${st.snittSvarstidS} s</b> i snitt` : '');
     $('hist').innerHTML = s.historik.slice(1, 6).map(x =>
       `<li class="hist">${tid(x.ts)} <b>${esc(x.kvarter)}</b> → ${esc(x['fråga'])}${x.svar && x.svar.riktigt ? ' ✓' : ''}${x.kedja ? ` <span class="stat">(genom ${new Set(x.kedja.map(e => e.kvarter)).size} kvarter)</span>` : ''}</li>`).join('');
+    const sh = sagaHtml();
+    $('saga').hidden = !sh;
+    if (sh) $('saga').innerHTML = sh;
     matare();
   } catch {}
 }

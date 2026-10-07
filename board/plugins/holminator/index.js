@@ -25,7 +25,7 @@ const STOPP = new Set(('och att det som en är på av för med till den har inte
   'the a an is are of to in on for and or what who how when where why do does can you we it this that').split(' '));
 
 const st = {
-  poster: [], handelser: [], svar: [], ko: [], besvarat: new Set(), timer: null,
+  poster: [], handelser: [], svar: [], ko: [], besvarat: new Set(), timer: null, takt: [],
   formagor: new Map(),    // förmåga (gemener) -> { förmåga, team, inlägg, ts, källa: 'anspråk' | 'ledning' }
   leveranser: new Map(),  // team -> { team, pr, inlägg, ts }
   krockar: [],            // { förmåga, team, hos, inlägg, först, ts, löst: null | { team, inlägg, bytte? } }
@@ -162,6 +162,8 @@ const kalla = p => ({ id: p.id, från: p.from, kanal: p.channel, utdrag: utdrag(
 const UPPDRAG = [
   { re: /sammanfatta|summar/, förmåga: 'mötet' },
   { re: /översätt|translat|på engelska|in english|på svenska|in swedish/, förmåga: 'översättaren' },
+  // Ordet "kursen" ensamt räknas inte: "vem bygger kursen?" är en vem-fråga som Minnet själv svarar på.
+  { re: /aktie|börs|\bstock|share price/, förmåga: 'kursen' },
 ];
 
 // Uppslaget. Returnerar { svar, styrka, källor }.
@@ -180,6 +182,23 @@ function slaUppInre(q, egetInlagg) {
       svar: `Det är ${namn}s uppgift` + (f ? `, som ${f.team} bygger.` : ', som ingen har tagit än.') + ' Minnet har inget eget svar.',
       styrka: 20,
       källor: f ? [{ id: f.inlägg, från: f.team, kanal: 'bygge', utdrag: `${f.team} bygger ${namn}` }] : [],
+    };
+  }
+
+  // Stadsbladet (ledningens redaktion): senaste numret, med notisernas egna källinlägg.
+  if (/stadsblad|tidning|nyhete|redaktion|newspaper|\bnews\b/.test(lc)) {
+    const nr = [...st.handelser].reverse().find(e => e.typ === 'nyheter.nummer' && e.nyttolast);
+    if (!nr) return { svar: 'Minnet har inte sett något nummer av Stadsbladet än.', styrka: 30, källor: [] };
+    const n = nr.nyttolast, notiser = Array.isArray(n.notiser) ? n.notiser : [];
+    const kallor = [{ id: nr.id, från: nr.kvarter, kanal: BUSS, utdrag: 'nyheter.nummer ' + (n.nummer || '') }];
+    for (const no of notiser) for (const id of (no.kallor || [])) {
+      const p = st.poster.find(x => x.id === Number(id));
+      if (p && kallor.length < 5) kallor.push(kalla(p));
+    }
+    return {
+      svar: utdrag(`Stadsbladet nr ${n.nummer || '?'} (${klocka(nr.ts)}): ${n.rubrik || ''}. ` + notiser.slice(0, 2).map(x => x.text).join(' '), 380),
+      styrka: 85,
+      källor: kallor,
     };
   }
 
@@ -349,16 +368,32 @@ function tidigareFraga(fraga, svar) {
   return null;
 }
 
+// Servern tillåter 6 händelser per minut och kvarter. Minnet räknar sina egna.
+const TAK_PER_MINUT = 6;
+const KUNSKAP_TAK = 2; // kunskap.ny skickas bara när högst så här många gått ut senaste minuten: svar har företräde
+function senasteMinuten() { const nu = Date.now(); st.takt = st.takt.filter(t => nu - t < 60000); return st.takt.length; }
 function skicka(ctx, typ, opts) {
   const r = ctx.board.emit(typ, opts);
   if (!r || r.error) { console.error('[holminator] emit', typ, r && r.error); return null; }
+  st.takt.push(Date.now());
   return r.handelse;
 }
 
-// kunskap.ny ligger i kö och skickas högst var 15:e sekund, så frågor alltid har plats under serverns 6 per minut.
+// kunskap.ny ligger i kö och skickas högst var 15:e sekund, och bara när det finns plats kvar för svar.
+// Ett nekat utskick ligger kvar i kön till nästa varv.
 function tomKo(ctx) {
-  const h = st.ko.shift();
-  if (h) skicka(ctx, h.typ, { styrka: h.styrka, nyttolast: h.nyttolast });
+  const h = st.ko[0];
+  if (!h || senasteMinuten() > KUNSKAP_TAK) return;
+  if (skicka(ctx, h.typ, { styrka: h.styrka, nyttolast: h.nyttolast })) st.ko.shift();
+}
+
+// Ett svar som servern nekar (taket) försöks igen efter några sekunder, högst tre gånger.
+function skickaSvar(ctx, opts, forsok = 0) {
+  const h = skicka(ctx, 'minne.träff', opts);
+  if (h || forsok >= 3) return h;
+  const t = setTimeout(() => { try { skickaSvar(ctx, opts, forsok + 1); } catch (err) { console.error('[holminator]', err && err.message); } }, 4000);
+  if (t.unref) t.unref();
+  return null;
 }
 
 function lasIn(ctx) {
@@ -413,7 +448,7 @@ module.exports = {
     const forr = tidigareFraga(fraga, utdrag(u.svar, 400));
     const svar = u.svar + (forr ? ` (Samma fråga ställdes ${klocka(forr.ts)}.)` : '');
     const nyttolast = { fråga: utdrag(fraga, 200), svar: utdrag(svar, 400), källor: u.källor, kanal: n.kanal, inlägg: n.inlägg };
-    const h = skicka(ctx, 'minne.träff', { orsak: e.id, styrka: u.styrka, nyttolast });
+    const h = skickaSvar(ctx, { orsak: e.id, styrka: u.styrka, nyttolast });
     st.svar.push({ ts: Date.now(), fråga: nyttolast.fråga, svar: nyttolast.svar, styrka: u.styrka, källor: u.källor.length, händelse: h && h.id, från: e.kvarter });
     if (st.svar.length > 50) st.svar.shift();
   },

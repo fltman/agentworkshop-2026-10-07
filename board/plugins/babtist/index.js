@@ -13,8 +13,10 @@
 //
 //   GET /t/babtist/forslag → de senaste lots.förslag
 //   GET /t/babtist/agare   → förmåga → team, som Lotsen läser det ur #bygge
+//   GET /t/babtist/kurs    → Sinch-kursen (förmågan Kursen, se kursen.js)
 
 const VANTA_MS = Number(process.env.LOTSEN_VANTA_MS || 30000);
+const kursen = require('./kursen');
 const VANTA_EXTRA_MS = Number(process.env.LOTSEN_EXTRA_MS || 90000);
 const STOPPORD = new Set([
   'och', 'att', 'det', 'som', 'för', 'med', 'när', 'hur', 'vem', 'vad', 'har', 'inte', 'kan', 'ska', 'vill',
@@ -98,7 +100,7 @@ function status(handelser, fraga) {
   const kedja = handelser.filter((e) => e.id > fraga.id && rotFraga(handelser, e)?.id === fraga.id);
   if (kedja.some((e) => e.typ === 'svar.klart')) return 'klar';
   if (kedja.some((e) => e.typ === 'sammanfattning.klar'
-    || (e.styrka !== null && e.styrka >= 60 && ['minne.träff', 'svar.utkast', 'svar.granskat'].includes(e.typ)))) return 'på väg';
+    || (e.styrka !== null && e.styrka >= 60 && ['minne.träff', 'kunskap.ny', 'svar.utkast', 'svar.granskat'].includes(e.typ)))) return 'på väg';
   return 'tyst';
 }
 
@@ -121,7 +123,9 @@ function lotsa(ctx, fraga, utlosare) {
   const n = fraga.nyttolast || {};
   let fragare = n.frågare;
   if (!fragare && n.inlägg) fragare = (ctx.board.query({ limit: 500 }).find((m) => m.id === n.inlägg) || {}).from;
-  const k = franKon(ctx, fraga, fragare) || hittaKandidat(ctx.board, ctx.team, n.fråga, fragare);
+  // Nämner frågan en förmåga är ägaren säkrast; annars går Köns förslag före vår egen gissning.
+  const egen = hittaKandidat(ctx.board, ctx.team, n.fråga, fragare);
+  const k = (egen && egen.styrka >= 90 ? egen : null) || franKon(ctx, fraga, fragare) || egen;
   if (!k) {
     // Ingen vet: säg det hellre än att tiga, så att frågaren kan vända sig till rummet.
     const r0 = ctx.board.emit('lots.förslag', {
@@ -152,10 +156,15 @@ function lotsa(ctx, fraga, utlosare) {
 }
 
 module.exports = {
-  async handle(req, res, { path, board }) {
-    const json = (d) => { res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(d)); return true; };
+  async handle(req, res, { path, board, url }) {
+    const json = (d, kod = 200) => { res.writeHead(kod, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(d)); return true; };
     if (req.method === 'GET' && path === '/forslag') return json(board.events(300).filter((e) => e.typ === 'lots.förslag').slice(-20));
     if (req.method === 'GET' && path === '/agare') return json(Object.fromEntries([...agare(board)].map(([k, v]) => [k, v.team])));
+    if (req.method === 'GET' && path === '/kurs') {
+      const range = (url && url.searchParams.get('range')) || '1y';
+      if (!kursen.INTERVALL[range]) return json({ fel: 'okänt intervall' }, 400);
+      try { return json(await kursen.hamta(range)); } catch (err) { return json({ fel: err.message }, 502); }
+    }
     return false;
   },
 
@@ -167,6 +176,7 @@ module.exports = {
       // Rösten som råkar höras av Örat är inte en riktig fråga.
       const rosten = agare(ctx.board).get('rösten');
       if (rosten && e.nyttolast.frågare === rosten.team) { st.hanterade.add(e.id); return; }
+      if (kursen.arAktiefraga(e.nyttolast.fråga)) kursen.svara(e, ctx);
       const kolla = (andraGangen) => {
         try {
           st.timrar.delete(e.id);
@@ -190,7 +200,9 @@ module.exports = {
     const fraga = rotFraga(handelser, e);
     if (!fraga) return;
     // Frågor som Mötet eller Översättaren äger: Minnet vet inget, men förmågan svarar. Låt timern avgöra.
-    if (e.typ === 'minne.träff' && UPPDRAG.some(([re]) => re.test(String(fraga.nyttolast?.fråga || '').toLowerCase()))) return;
+    // Samma sak för aktiefrågor, som vår egen Kursen svarar på.
+    if (e.typ === 'minne.träff' && (kursen.arAktiefraga(fraga.nyttolast?.fråga)
+      || UPPDRAG.some(([re]) => re.test(String(fraga.nyttolast?.fråga || '').toLowerCase())))) return;
     // Underkänt svar men Minnet är säkert eller Mötet har sammanfattat: låt timern avgöra, i stället för att lotsa direkt.
     if (e.typ === 'svar.granskat' && handelser.some((x) => rotFraga(handelser, x)?.id === fraga.id
       && (x.typ === 'sammanfattning.klar' || (x.typ === 'minne.träff' && x.styrka !== null && x.styrka >= 70)))) return;

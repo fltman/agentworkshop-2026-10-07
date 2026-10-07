@@ -8,11 +8,19 @@
   h1 { margin-bottom: 8px; } h2 { font-size: 18px; }
   article { padding: 12px; margin: 12px 0; border: 1px solid #4b5563; border-radius: 10px; }
   .note { color: #cbd5e1; } #error { color: #fca5a5; } a { color: #93c5fd; }
+  svg { width: 100%; display: block; overflow: hidden; }
+  summary { cursor: pointer; } details p { overflow-wrap: anywhere; }
 </style>
 <h1>Stämningen</h1>
-<p class="note">Frågor, uttryckliga hinder och uppskattning i språket – inte människors känslor.</p>
+<p class="note">❓ Frågor · 🚧 Hinder · 🙌 Uppskattning · ❤️ Uttryckt omtanke – språksignaler, inte människors känslor.</p>
+<h2>Kanalernas rullande tidslinjer</h2>
+<p id="timeline-status" role="status">Hämtar tidslinjer…</p>
+<p class="note">← Äldre (10 minuter) · Nutid → · Grå yta betyder okänt underlag, inte tystnad.</p>
+<section id="timelines" aria-label="Aktivitet per kanal"></section>
+<h2>Senaste bedömning från Pulsen</h2>
 <p id="connection" role="status">Hämtar status…</p>
 <p id="error" role="alert"></p>
 <main id="channels"></main>
 <script src="app.js"></script>
+<script src="timeline.js"></script>
 </html>

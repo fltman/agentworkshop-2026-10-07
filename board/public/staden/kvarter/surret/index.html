@@ -23,9 +23,14 @@
   .steg b{color:var(--gul);font-weight:normal}
   .pil{color:var(--dim)}
   .tom{color:var(--dim);padding:20px 12px;text-align:center}
+  .portratt{width:44px;height:44px;border-radius:8px;object-fit:cover;border:1px solid #2a3038;display:none;cursor:zoom-in}
+  .portratt.stor{position:fixed;inset:10%;width:80%;height:80%;object-fit:contain;background:#000d;z-index:9;cursor:zoom-out}
+  li.dubblett{border-color:#6e5a9e;opacity:.75}
+  .sprak{font-size:10px;color:var(--dim);border:1px solid #2a3038;border-radius:4px;padding:0 3px;margin-left:4px}
 </style></head>
 <body>
 <header>
+  <img class="portratt" id="portratt" alt="">
   <span class="ora" id="ora">👂</span>
   <div><h1>ÖRAT</h1><div class="sub" id="sub">Kollegans hörsel · fråga @kollegan i valfri kanal</div></div>
   <div class="siffror" id="siffror"></div>
@@ -35,19 +40,23 @@
 const en = !/^sv/i.test(navigator.language || 'sv');
 if (en) document.getElementById('sub').textContent = "Kollegan's ear · ask @kollegan in any channel";
 const sett = new Set();
+const iRam = (() => { try { return window.top !== window.self; } catch { return true; } })();
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const tid = ts => new Date(ts).toTimeString().slice(0, 5);
 
 function rad(f) {
-  const klass = f.besvarad ? 'besvarad' : f.obesvarad ? 'obesvarad' : f.iKo ? 'ko' : '';
+  const klass = f.dubblettAv ? 'dubblett' : f.besvarad ? 'besvarad' : f.obesvarad ? 'obesvarad' : f.iKo ? 'ko' : '';
   const ny = !sett.has(f.inlägg) && sett.size ? ' ny' : '';
-  const status = f.besvarad ? (en ? 'answered' : 'besvarad') : f.obesvarad ? (en ? 'no one reacted' : 'ingen har reagerat')
+  const status = f.dubblettAv ? (en ? 'same as ' : 'samma som ') + f.dubblettAv
+    : f.besvarad ? (en ? 'answered' : 'besvarad') : f.obesvarad ? (en ? 'no one reacted' : 'ingen har reagerat')
     : f.iKo ? (en ? 'queued' : 'i kö') : f.kedja.length ? (en ? 'travelling…' : 'på väg…') : (en ? 'heard' : 'hörd');
-  const steg = ['<span class="steg"><b>örat</b> fråga.ny' + (f.styrka != null ? ' ' + f.styrka : '') + '</span>']
+  const steg = f.dubblettAv ? '<span class="steg"><b>örat</b> ' + (en ? 'pointed to ' : 'hänvisade till ') + f.dubblettAv + '</span>'
+    : ['<span class="steg"><b>örat</b> fråga.ny' + (f.styrka != null ? ' ' + f.styrka : '') + '</span>']
     .concat(f.kedja.map(k => '<span class="steg"><b>' + esc(k.kvarter) + '</b> ' + esc(k.typ) + (k.styrka != null ? ' ' + k.styrka : '') + '</span>'))
     .join('<span class="pil">→</span>');
   return '<li class="' + klass + ny + '"><div class="q">' + esc(f.fråga.replace(/@kollegan\b/i, '').trim() || f.fråga) + '</div>'
     + '<div class="meta">' + tid(f.ts) + ' · ' + esc(f.frågare) + ' i #' + esc(f.kanal)
+    + (f.språk ? '<span class="sprak">' + esc(f.språk) + '</span>' : '')
     + (f.följdTill ? ' · ' + (en ? 'follow-up to ' : 'följdfråga till ') + f.följdTill : '') + ' · ' + status + '</div>'
     + '<div class="kedja">' + steg + '</div></li>';
 }
@@ -60,6 +69,12 @@ async function visa() {
     ]);
     document.getElementById('siffror').innerHTML = '<b>' + s.hört + '</b> ' + (en ? 'heard' : 'hörda') + '<br>'
       + s.besvarade + ' ' + (en ? 'answered' : 'besvarade') + ' · ' + s.väntar + ' ' + (en ? 'waiting' : 'väntar');
+    const p = document.getElementById('portratt');
+    // På /staden visar ramen redan porträttet som hero-bild, så bara fristående rutor visar sitt eget.
+    if (!iRam && s.porträtt && s.porträtt.url && /^\/t\/[\w-]+\//.test(s.porträtt.url) && p.getAttribute('src') !== s.porträtt.url) {
+      p.src = s.porträtt.url; p.title = (en ? 'Portrait by ateljen: ' : 'Porträtt av ateljen: ') + (s.porträtt.prompt || '');
+      p.alt = 'Örat'; p.style.display = 'block';
+    }
     if (!fragor.length) return;
     if (fragor.some(f => !sett.has(f.inlägg)) && sett.size) {
       const o = document.getElementById('ora'); o.classList.remove('surr'); void o.offsetWidth; o.classList.add('surr');
@@ -69,4 +84,5 @@ async function visa() {
   } catch {}
 }
 visa(); setInterval(visa, 4000);
+document.getElementById('portratt').onclick = e => e.target.classList.toggle('stor');
 </script></body></html>
