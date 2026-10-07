@@ -2,6 +2,8 @@
 // Hör varje inlägg som nämner @kollegan och skickar fråga.ny på bussen #kollegan-events.
 // Följer sedan kedjan (orsak) som andra förmågor bygger på frågan, så rutan på /staden kan visa
 // vart frågan tog vägen. Har ingen reagerat på tre minuter skickar Örat fråga.obesvarad.
+// fråga.ny bär frågans språk (sv/en). Samma fråga inom fem minuter får ingen ny kedja, bara en
+// hänvisning till den första. Ateljens bild.klar till surret visas som porträtt i rutan.
 //
 //   GET /t/surret/fragor   → senaste frågorna med sina kedjor
 //   GET /t/surret/status   → siffror
@@ -11,6 +13,9 @@ const MAX_FRAGOR = 60;
 const OBESVARAD_MS = 3 * 60 * 1000;
 const SVAR_TYPER = /^svar\.(klart|granskat|översatt)$/;
 const NAMNET = /@kollegan\b/i;
+const DUBBLETT_MS = 5 * 60 * 1000;
+const SV_ORD = /^(och|är|vad|vem|hur|varför|vilken|vilka|när|det|att|jag|vi|ni|inte|kan|någon|finns|som|på|med|för|om|har|en|ett|till|bygger|vet)$/;
+const EN_ORD = /^(the|is|what|who|how|why|which|when|and|to|of|can|does|do|are|you|we|in|it|anyone|there|has|have|a|an|building|know)$/;
 
 const st = {
   fragor: [],             // {inlägg, kanal, frågare, fråga, styrka, ts, händelse, följdTill, kedja, besvarad, obesvarad}
@@ -19,8 +24,33 @@ const st = {
   ko: [],                 // frågor som väntar på plats under takten 6/min
   svarsposter: new Set(), // kvarter som skickat svar.*: deras trådsvar på Torget hörs inte som frågor
   hört: 0,
+  dubbletter: 0,
+  portratt: null,         // ateljens bild.klar till surret: {url, prompt, ts}
   timer: null,
 };
+
+// Frågans språk, så Översättaren och Rösten vet vad de ska svara på.
+function sprak(text) {
+  const t = text.replace(/@[\w.-]+/g, ' ').replace(/https?:\/\/\S+/g, ' ').toLowerCase();
+  const ord = t.split(/[^a-zåäöéü]+/).filter(Boolean);
+  let sv = ord.filter(o => SV_ORD.test(o)).length + (/[åäö]/.test(t) ? 2 : 0);
+  let en = ord.filter(o => EN_ORD.test(o)).length;
+  return en > sv ? 'en' : 'sv';
+}
+
+function normalisera(text) {
+  return text.replace(/@[\w.-]+/g, ' ').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+function hittaDubblett(norm, ts) {
+  if (norm.length < 8) return null;
+  for (let i = st.fragor.length - 1; i >= 0; i--) {
+    const f = st.fragor[i];
+    if (ts - f.ts > DUBBLETT_MS) break;
+    if (!f.dubblettAv && !f.fel && f.norm === norm) return f;
+  }
+  return null;
+}
 
 function tydlighet(text) {
   const t = text.replace(NAMNET, '').trim();
@@ -73,7 +103,7 @@ function nyFraga(f) {
 function skicka(f, board) {
   const r = board.emit('fråga.ny', {
     styrka: f.styrka,
-    nyttolast: { fråga: f.fråga, inlägg: f.inlägg, kanal: f.kanal, frågare: f.frågare, ...(f.följdTill ? { följdfråga_till: f.följdTill } : {}) },
+    nyttolast: { fråga: f.fråga, inlägg: f.inlägg, kanal: f.kanal, frågare: f.frågare, språk: f.språk, ...(f.följdTill ? { följdfråga_till: f.följdTill } : {}) },
   });
   if (r && r.handelse) { f.händelse = r.handelse.id; st.perHandelse.set(r.handelse.id, f); return true; }
   if (r && /per minut/.test(r.error || '')) return false;
@@ -106,9 +136,14 @@ function las(e, team) {
   // Alla svar.* räknas, även svar.utkast: Rösten skickar det innan svaret postas på Torget.
   if (/^svar\./.test(e.typ) && e.kvarter !== team) st.svarsposter.add(e.kvarter);
   const n = e.nyttolast && typeof e.nyttolast === 'object' ? e.nyttolast : {};
+  if (e.typ === 'bild.klar' && n.till === team && typeof n.url === 'string' && /^\/t\/[\w-]+\//.test(n.url)) {
+    st.portratt = { url: n.url, prompt: String(n.prompt || '').slice(0, 300), ts: e.ts };
+    return;
+  }
   if (e.kvarter === team) {
     if (e.typ === 'fråga.ny' && n.inlägg && !st.perInlagg.has(n.inlägg)) {
       const f = { inlägg: n.inlägg, kanal: n.kanal, frågare: n.frågare, fråga: n.fråga, styrka: e.styrka, ts: e.ts,
+        språk: n.språk || sprak(String(n.fråga || '')), norm: normalisera(String(n.fråga || '')),
         händelse: e.id, följdTill: n.följdfråga_till, kedja: [], besvarad: false, obesvarad: null };
       nyFraga(f); st.perHandelse.set(e.id, f); st.hört++;
     } else if (e.typ === 'fråga.obesvarad' && st.perHandelse.has(e.orsak)) {
@@ -144,12 +179,24 @@ module.exports = {
     if (m.channel === BUSS || m.from === team) return;
     if (!NAMNET.test(m.text) || !arTilltal(m) || arSvarFranKollegan(m) || st.perInlagg.has(m.id)) return;
     const rot = rotFraga(m, board);
+    const norm = normalisera(m.text);
     const f = {
       inlägg: m.id, kanal: m.channel, frågare: m.from, fråga: m.text.slice(0, 500), styrka: tydlighet(m.text), ts: m.ts,
+      språk: sprak(m.text), norm,
       händelse: null, följdTill: rot ? rot.inlägg : undefined, kedja: [], besvarad: false, obesvarad: null,
     };
     st.hört++;
+    const orig = rot ? null : hittaDubblett(norm, m.ts);
     nyFraga(f);
+    if (orig) {
+      // Samma fråga nyss: ingen ny kedja, bara en hänvisning till den första.
+      f.dubblettAv = orig.inlägg; st.dubbletter++;
+      const text = f.språk === 'en'
+        ? `Örat: the same question was asked a moment ago (post ${orig.inlägg}), the answer comes there.`
+        : `Örat: samma fråga ställdes nyss (inlägg ${orig.inlägg}), svaret kommer där.`;
+      try { board.post(text, m.channel, m.id); } catch (err) { console.error('[surret] post:', err && err.message); }
+      return;
+    }
     if (st.ko.length || !skicka(f, board)) st.ko.push(f);
   },
 
@@ -160,13 +207,15 @@ module.exports = {
     if (path === '/fragor') {
       return json(res, 200, st.fragor.slice(-25).reverse().map(f => ({
         inlägg: f.inlägg, kanal: f.kanal, frågare: f.frågare, fråga: f.fråga, styrka: f.styrka, ts: f.ts,
-        händelse: f.händelse, följdTill: f.följdTill || null, iKo: !f.händelse && !f.fel,
+        händelse: f.händelse, följdTill: f.följdTill || null, iKo: !f.händelse && !f.fel && !f.dubblettAv,
+        språk: f.språk, dubblettAv: f.dubblettAv || null,
         besvarad: f.besvarad, obesvarad: !!(f.obesvarad && f.obesvarad > 0), kedja: f.kedja,
       })));
     }
     if (path === '/status' || path === '/' || path === '') {
       return json(res, 200, {
         förmåga: 'Örat', hört: st.hört, frågor: st.fragor.length, iKo: st.ko.length,
+        dubbletter: st.dubbletter, porträtt: st.portratt,
         besvarade: st.fragor.filter(f => f.besvarad).length,
         väntar: st.fragor.filter(f => f.händelse && !f.besvarad).length,
       });
