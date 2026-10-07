@@ -109,7 +109,7 @@ function skicka(f, board) {
     styrka: f.styrka,
     nyttolast: { fråga: f.fråga, inlägg: f.inlägg, kanal: f.kanal, frågare: f.frågare, språk: f.språk, ...(f.följdTill ? { följdfråga_till: f.följdTill } : {}) },
   });
-  if (r && r.handelse) { f.händelse = r.handelse.id; st.perHandelse.set(r.handelse.id, f); return true; }
+  if (r && r.handelse) { f.händelse = r.handelse.id; f.händelseTs = r.handelse.ts || Date.now(); st.perHandelse.set(r.handelse.id, f); return true; }
   if (r && /per minut/.test(r.error || '')) return false;
   console.error('[surret] emit fråga.ny:', r && r.error);
   f.fel = (r && r.error) || 'okänt fel';
@@ -149,7 +149,7 @@ function las(e, team) {
     if (e.typ === 'fråga.ny' && n.inlägg && !st.perInlagg.has(n.inlägg)) {
       const f = { inlägg: n.inlägg, kanal: n.kanal, frågare: n.frågare, fråga: n.fråga, styrka: e.styrka, ts: e.ts,
         språk: n.språk || sprak(String(n.fråga || '')), norm: normalisera(String(n.fråga || '')),
-        händelse: e.id, följdTill: n.följdfråga_till, kedja: [], besvarad: false, obesvarad: null };
+        händelse: e.id, händelseTs: e.ts, följdTill: n.följdfråga_till, kedja: [], besvarad: false, obesvarad: null };
       nyFraga(f); st.perHandelse.set(e.id, f); st.hört++;
     } else if (e.typ === 'fråga.obesvarad' && st.perHandelse.has(e.orsak)) {
       const f = st.perHandelse.get(e.orsak); f.obesvarad = e.id; st.perHandelse.set(e.id, f);
@@ -185,17 +185,18 @@ function rapport(url, team) {
   const komplett = from >= minnetFran && st.fragor.length < MAX_FRAGOR;
   const records = iPeriod.map(f => ({
     question_id: f.händelse || null,
-    received_at: f.ts,
+    received_at: f.händelseTs || null, // fråga.ny-händelsens ts, så den matchar Köns rotpost
     answered_at: besvaradVid(f),
     cancelled_at: null,
     audience: st.kvarter.has(f.frågare) ? 'agent' : 'unknown',
     useful: null,
     saved_minutes: null,
+    heard_at: f.ts,
     inlägg: f.inlägg, kanal: f.kanal, frågare: f.frågare, språk: f.språk || null,
     följdfråga_till: f.följdTill || null, dubblett_av: f.dubblettAv || null,
     flaggad_obesvarad: !!(f.obesvarad && f.obesvarad > 0),
   }));
-  const tider = records.filter(r => r.answered_at).map(r => r.answered_at - r.received_at).sort((a, b) => a - b);
+  const tider = records.filter(r => r.answered_at && r.received_at).map(r => r.answered_at - r.received_at).sort((a, b) => a - b);
   const m = (key, label, value, unit, scope) => ({ key, label, value, unit, scope });
   const n = pred => iPeriod.filter(pred).length;
   return {
