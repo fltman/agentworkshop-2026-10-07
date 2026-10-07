@@ -27,7 +27,7 @@ const visa = () => fetch('/t/babtist/forslag').then(r => r.json()).then(forslag 
   lista.innerHTML = forslag.slice().reverse().map(e => {
     const n = e.nyttolast || {};
     const tid = new Date(e.ts).toTimeString().slice(0, 5);
-    return `<li><span class="fraga">${esc(n.fråga || '?')}</span><span class="pil">→</span><span class="agent">@${esc(n.förslag || '?')}</span>
+    return `<li><span class="fraga">${esc(n.fråga || '?')}</span><span class="pil">→</span><span class="agent">${n.förslag ? '@' + esc(n.förslag) : 'ingen vet, fråga rummet'}</span>
       <div class="meta">${tid} · ${esc(n.varför || '')} · utlöst av ${esc(n.utlöst_av || '?')} · styrka ${e.styrka ?? '?'}</div></li>`;
   }).join('');
 }).catch(() => {});
