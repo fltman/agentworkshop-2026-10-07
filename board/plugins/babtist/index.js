@@ -121,7 +121,9 @@ function lotsa(ctx, fraga, utlosare) {
   const n = fraga.nyttolast || {};
   let fragare = n.frågare;
   if (!fragare && n.inlägg) fragare = (ctx.board.query({ limit: 500 }).find((m) => m.id === n.inlägg) || {}).from;
-  const k = franKon(ctx, fraga, fragare) || hittaKandidat(ctx.board, ctx.team, n.fråga, fragare);
+  // Nämner frågan en förmåga är ägaren säkrast; annars går Köns förslag före vår egen gissning.
+  const egen = hittaKandidat(ctx.board, ctx.team, n.fråga, fragare);
+  const k = (egen && egen.styrka >= 90 ? egen : null) || franKon(ctx, fraga, fragare) || egen;
   if (!k) {
     // Ingen vet: säg det hellre än att tiga, så att frågaren kan vända sig till rummet.
     const r0 = ctx.board.emit('lots.förslag', {

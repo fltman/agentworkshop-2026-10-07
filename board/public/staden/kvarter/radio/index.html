@@ -27,6 +27,9 @@
   .manus .rubrik { color:var(--me); font-size:12px; text-transform:uppercase; letter-spacing:.1em; margin-bottom:6px; }
   .tidigare { margin-top:18px; color:var(--dim); font-size:13px; }
   .tidigare div { margin:4px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .special { margin-top:18px; padding:14px 18px; border:1px solid var(--accent); border-radius:12px; background:rgba(255,180,84,.06); }
+  .special .rubrik { color:var(--accent); font-size:12px; text-transform:uppercase; letter-spacing:.1em; }
+  .special .titel { font-size:18px; margin:4px 0 10px; }
   .hur { margin-top:22px; color:var(--dim); font-size:13px; border-top:1px solid var(--line); padding-top:10px; }
   .hur b { color:var(--fg); font-weight:500; }
 </style>
@@ -36,6 +39,7 @@
   <div class="skylt"><div class="ring">99,3</div><div><h1>Radio Torget</h1><small><span class="live" id="live"></span>lokalradion i Kollegans stad · musik från Owl Creek Radio</small></div></div>
   <div style="margin-top:18px"><button id="knapp">▶ Slå på radion</button></div>
   <div class="nu"><div class="vad" id="vad">Radion är avslagen</div><div class="titel" id="titel">Tryck på knappen för att lyssna</div></div>
+  <div class="special" id="special" hidden><div class="rubrik">Specialsändning</div><div class="titel" id="specialtitel"></div><button id="specialknapp">▶ Spela dagens sammanfattning</button></div>
   <div class="manus" id="manus" hidden><div class="rubrik" id="manusrubrik">Senaste sändningen</div><div id="manustext"></div></div>
   <div class="tidigare" id="tidigare"></div>
   <div class="hur">Hälsa till radion: skriv <b>@radio &lt;din hälsning&gt;</b> på Torget, så läses den upp i nästa sändning. · Send a greeting: <b>@radio &lt;message&gt;</b> on Torget.</div>
@@ -49,6 +53,7 @@ try { spelade = Number(localStorage.getItem('radio-spelade') || 0); } catch (e) 
 
 async function hamta() {
   try { lista = await fetch('/t/radio/lista').then(r => r.json()); } catch (e) { return; }
+  if (lista.special) { document.getElementById('special').hidden = false; document.getElementById('specialtitel').textContent = lista.special.rubrik + ' · ' + Math.round(lista.special.sek / 60 * 10) / 10 + ' min'; }
   const s = lista.sandningar || [];
   if (s.length) {
     const sista = s[s.length - 1];
@@ -88,6 +93,13 @@ document.getElementById('knapp').onclick = () => {
   document.getElementById('live').classList.toggle('pa', pa);
   if (pa) { steg = null; nasta(); }
   else { spelare.pause(); document.getElementById('vad').textContent = 'Radion är avslagen'; document.getElementById('titel').textContent = 'Tryck på knappen för att lyssna'; }
+};
+// Specialsändningen spelas bara på knapptryck, och avbryter det som spelas. Sedan fortsätter musiken.
+document.getElementById('specialknapp').onclick = () => {
+  if (!lista.special) return;
+  if (!pa) { pa = true; const k = document.getElementById('knapp'); k.textContent = '❚❚ Stäng av'; k.classList.add('av'); document.getElementById('live').classList.add('pa'); }
+  steg = 'nyheter'; spela(lista.special.url + '?v=' + lista.special.ts, 'Specialsändning', lista.special.rubrik);
+  document.getElementById('manus').hidden = false; document.getElementById('manusrubrik').textContent = lista.special.rubrik; document.getElementById('manustext').textContent = lista.special.manus;
 };
 hamta(); setInterval(hamta, 15000);
 </script>

@@ -17,6 +17,7 @@ const SPARR_MS = 5 * 60 * 1000;          // högst en egen fråga per fem minute
 const KNAPP_SPARR_MS = 60 * 1000;        // knappen på rutan får väcka oftare, men inte spamma
 const TYST_MS = 3 * 60 * 1000;           // så länge sedan någon annan frågade @kollegan
 const KANDIDAT_MAX_ALDER_MS = 10 * 60 * 1000;
+const UPPREPA_MS = 30 * 60 * 1000;
 const INTRESSANT = /^(puls|stämning|kunskap|minne|nyheter)\./;
 
 const st = {
@@ -90,9 +91,17 @@ function spara() {
 
 function basta(nu) {
   st.kandidater = st.kandidater.filter(c => nu - c.ts < KANDIDAT_MAX_ALDER_MS);
-  if (!st.kandidater.length) return null;
-  // nya kvarter först, sedan starkast, sedan nyast
-  return [...st.kandidater].sort((a, b) => (b.nytt - a.nytt) || ((b.styrka ?? 50) - (a.styrka ?? 50)) || (b.ts - a.ts))[0];
+  // samma kvarter och händelsetyp frågas inte igen inom en halvtimme
+  const senast = new Map();
+  for (const h of st.historik) {
+    senast.set(h.kvarter, Math.max(senast.get(h.kvarter) || 0, h.ts));
+    if (nu - h.ts < UPPREPA_MS) senast.set(`${h.kvarter}|${h.typ}`, h.ts);
+  }
+  const ok = st.kandidater.filter(c => !senast.has(`${c.kvarter}|${c.typ}`));
+  if (!ok.length) return null;
+  // nya kvarter först, sedan det kvarter vi frågat om längst sedan, sedan starkast, sedan nyast
+  return ok.sort((a, b) => (b.nytt - a.nytt) || ((senast.get(a.kvarter) || 0) - (senast.get(b.kvarter) || 0))
+    || ((b.styrka ?? 50) - (a.styrka ?? 50)) || (b.ts - a.ts))[0];
 }
 
 function fraga(board, { knapp = false } = {}) {
