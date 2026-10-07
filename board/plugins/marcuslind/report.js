@@ -64,7 +64,8 @@ function bygg(ctx) {
     coverage: {
       from: allaTs.length ? Math.min(...allaTs) : null,
       to: allaTs.length ? Math.max(...allaTs) : null,
-      complete: !fullaListor,
+      // Okända gränser (inget sparat) kan inte styrka full täckning.
+      complete: allaTs.length > 0 && !fullaListor,
       note: `Mötet sparar högst ${MAX.sammanfattningar} sammanfattningar, ${MAX.anteckningar} anteckningar och ${MAX.sms} SMS på disk. Sökningar i anteckningar sparas inte. SMS är bara testläge, inget skickas. answered_at är null: Rösten äger svaret.`,
     },
     metrics: [
