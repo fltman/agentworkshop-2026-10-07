@@ -1,12 +1,15 @@
 // Minnet: Kollegans långtidsminne, byggt av holminator.
 //
-// Lyssnar på allt som sägs på Torget och allt som händer på bussen #kollegan-events, och bygger en tidslinje
-// över dagen plus en lista över fakta (vem bygger vilken förmåga). När någon förmåga skickar en fråga
-// (fråga.ny, fråga.prioriterad) slår Minnet upp den och svarar med minne.träff: ett kort svar och källinläggen
-// det bygger på. Saknas underlag säger Minnet det, med styrka 0. Nya fakta skickas som kunskap.ny.
+// Lyssnar på allt som sägs på Torget och allt som händer på bussen #kollegan-events. Bygger en tidslinje över
+// dagen och fakta: vem bygger vilken förmåga, vem har levererat, vad som bestämts. När en förmåga skickar en fråga
+// (fråga.ny, fråga.prioriterad) slår Minnet upp den och svarar med minne.träff: ett kort svar och källinläggen det
+// bygger på. Saknas underlag säger Minnet det, med styrka 0. Nya fakta skickas som kunskap.ny.
+//
+// Fakta om förmågor: den som ropar först i #bygge behåller förmågan. Ledningens lägesinlägg ("Minnet: holminator")
+// vinner alltid, eftersom det är där krockar avgörs.
 //
 // HTTP under /t/holminator/:
-//   GET /status           antal inlägg och händelser, senaste svar
+//   GET /status           antal inlägg och händelser, senaste svar, leveranser
 //   GET /fakta            vem bygger vad
 //   GET /tidslinje        aktivitet per tiominutersfack, plus de senaste händelserna
 //   GET /sok?q=...        samma uppslag som en fråga på bussen, utan att skicka något
@@ -14,89 +17,204 @@
 const BUSS = 'kollegan-events';
 const MAX_POSTER = 5000;
 const MAX_HANDELSER = 2000;
+const LEDNING = /^ledarens-agent$|^release/;
 
 const STOPP = new Set(('och att det som en är på av för med till den har inte om ett vi jag du ni de vad vem hur när var varför ' +
   'kan ska vill finns så men eller från hos här där nu bara också mer alla något några kollegan hej tack snälla ' +
   'the a an is are of to in on for and or what who how when where why do does can you we it this that').split(' '));
 
-const st = { poster: [], handelser: [], fakta: new Map(), svar: [], ko: [], besvarat: new Set(), timer: null };
+const st = {
+  poster: [], handelser: [], svar: [], ko: [], besvarat: new Set(), timer: null,
+  formagor: new Map(),    // förmåga (gemener) -> { förmåga, team, inlägg, ts, källa: 'anspråk' | 'ledning' }
+  leveranser: new Map(),  // team -> { team, pr, inlägg, ts }
+  krockar: [],            // { förmåga, team, hos, inlägg }
+  team: new Set(),        // alla som skrivit på Torget
+  beskrivning: new Map(), // team -> teamets eget inlägg när det ropade sin förmåga
+};
 
 function ord(text) {
-  return String(text || '').toLowerCase().replace(/@[\w-]+/g, ' ').match(/[a-zåäö0-9]{3,}/g)?.filter(w => !STOPP.has(w)) || [];
+  return String(text || '').toLowerCase().replace(/@[\w-]+/g, ' ').replace(/https?:\S+/g, ' ')
+    .match(/[a-zåäö0-9]{3,}/g)?.filter(w => !STOPP.has(w)) || [];
+}
+// Två ord är samma stam om de delar början: minne/minnet, puls/pulsen, granska/granskaren.
+function sammaStam(a, b) {
+  if (a === b) return true;
+  const n = Math.min(a.length, b.length);
+  if (n < 4) return false;
+  let i = 0;
+  while (i < n && a[i] === b[i]) i++;
+  return i >= 4 && i >= n - 2;
+}
+function harOrd(set, w) {
+  if (set.has(w)) return true;
+  for (const t of set) if (sammaStam(t, w)) return true;
+  return false;
 }
 function utdrag(text, n = 140) {
   const t = String(text || '').replace(/\s+/g, ' ').trim();
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
 }
 function klocka(ts) { return new Date(ts).toTimeString().slice(0, 5); }
+function versal(s) { s = s.toLowerCase(); return s.charAt(0).toUpperCase() + s.slice(1); }
 
-// "holminator tar förmågan Minnet", "team-martin tar förmågan Pulsen", "X takes the Ear"
+// "holminator tar förmågan Minnet", "Team tomhol tar förmågan Stämningen", "fralle tar Kön", "X takes the Ear"
 const ANSPRAK = [
   /\btar\s+(?:förmågan|organet|rollen)\s+([A-ZÅÄÖa-zåäö-]{3,30})/i,
+  /\btar\s+en\s+egen\s+förmåga[^:]*:\s*([A-ZÅÄÖa-zåäö-]{3,30})/i,
+  /\btar\s+([A-ZÅÄÖ][a-zåäö-]{2,30})\b/,
   /\b(?:takes?|claims?)\s+(?:the\s+)?(?:capability\s+)?([A-Za-z-]{3,30})(?:\s+capability)?/i,
 ];
-const INTE_FORMAGA = new Set(['en', 'ett', 'den', 'det', 'the', 'over', 'hand', 'care', 'part', 'that', 'this']);
+const INTE_FORMAGA = new Set(['en', 'ett', 'den', 'det', 'the', 'over', 'hand', 'care', 'part', 'that', 'this', 'lite']);
+// Förmågorna i PROJEKT.md. Egna förmågor ("tar en egen förmåga: Nyfikenheten") läggs till när de ropas.
+const KANDA = new Set(['örat', 'minnet', 'rösten', 'granskaren', 'översättaren', 'stämningen', 'kön', 'mötet', 'lotsen']);
 function hittaAnsprak(m) {
-  if (m.channel !== 'bygge') return null;
-  for (const re of ANSPRAK) {
-    const r = re.exec(m.text);
-    if (r && !INTE_FORMAGA.has(r[1].toLowerCase())) {
-      const f = r[1].toLowerCase();
-      return f.charAt(0).toUpperCase() + f.slice(1);
-    }
+  if (m.channel !== 'bygge' || LEDNING.test(m.from)) return null;
+  for (let i = 0; i < ANSPRAK.length; i++) {
+    const r = ANSPRAK[i].exec(m.text);
+    if (!r || INTE_FORMAGA.has(r[1].toLowerCase())) continue;
+    if (i === 2 && !KANDA.has(r[1].toLowerCase())) continue;   // "tar X" utan "förmågan" gäller bara kända namn
+    if (i < 2) KANDA.add(r[1].toLowerCase());
+    return versal(r[1]);
   }
   return null;
+}
+// Ledningens läge: "Minnet: holminator", "Minnet (holminator)", "Läget: Minnet holminator, Pulsen team-martin, ...".
+function hittaLedningsrader(m) {
+  if (m.channel !== 'bygge' || !LEDNING.test(m.from)) return [];
+  const ut = [];
+  const re = /([A-ZÅÄÖ][a-zåäö-]{2,30})(?::\s*|\s+\(|\s+)([a-z0-9][a-z0-9-]{1,39})\b/g;
+  for (const rad of m.text.split('\n')) {
+    if (/ropade|tog .* före|före er|minut/.test(rad) && !/^\s*[A-ZÅÄÖ][a-zåäö-]+:/.test(rad)) continue;
+    let r;
+    while ((r = re.exec(rad))) {
+      if (KANDA.has(r[1].toLowerCase()) && st.team.has(r[2])) ut.push({ förmåga: r[1], team: r[2] });
+    }
+  }
+  return ut;
+}
+function hittaLeverans(m) {
+  const r = /\bPR\s+inne\s+från\s+([a-z0-9-]+)/i.exec(m.text) || (m.channel === 'bygge' && /\bPR\b.*?(?:från|from)\s+([a-z0-9-]+)/i.exec(m.text));
+  if (!r) return null;
+  const pr = /\/pull\/(\d+)/.exec(m.text) || /\bPR\s*#?\s*(\d+)\b/.exec(m.text);
+  return { team: r[1].toLowerCase(), pr: pr ? Number(pr[1]) : null };
+}
+
+function kunskap(levande, fakta, extra) {
+  if (levande) st.ko.push({ typ: 'kunskap.ny', styrka: 80, nyttolast: { fakta, ...extra } });
+}
+
+function sattFormaga(förmåga, team, m, källa, levande) {
+  const k = förmåga.toLowerCase();
+  const fore = st.formagor.get(k);
+  if (fore && fore.team === team) { if (källa === 'ledning') fore.källa = 'ledning'; return; }
+  if (fore && fore.team !== team && källa === 'anspråk') {
+    st.krockar.push({ förmåga, team, hos: fore.team, inlägg: m.id });
+    return;
+  }
+  // Ett team har en förmåga. Byter det, släpps den gamla (om den inte är fastslagen av ledningen till ett annat team).
+  for (const [kk, v] of st.formagor) if (v.team === team && kk !== k && källa === 'anspråk' && v.källa !== 'ledning') st.formagor.delete(kk);
+  st.formagor.set(k, { förmåga, team, inlägg: m.id, ts: m.ts, källa });
+  kunskap(levande, `${team} bygger ${förmåga}`, { team, förmåga, inlägg: m.id });
 }
 
 function minnsPost(m, levande) {
   if (m.channel === BUSS) return;
   st.poster.push({ id: m.id, ts: m.ts, from: m.from, channel: m.channel, text: m.text, ord: new Set(ord(m.text)) });
   if (st.poster.length > MAX_POSTER) st.poster.shift();
+  st.team.add(m.from);
+
   const f = hittaAnsprak(m);
-  if (!f) return;
-  const fore = st.fakta.get(m.from);
-  if (fore && fore.förmåga === f) return;
-  st.fakta.set(m.from, { team: m.from, förmåga: f, inlägg: m.id, ts: m.ts });
-  if (levande) st.ko.push({ typ: 'kunskap.ny', styrka: 80, nyttolast: { fakta: `${m.from} bygger ${f}`, team: m.from, förmåga: f, inlägg: m.id } });
+  if (f) { st.beskrivning.set(m.from, m); sattFormaga(f, m.from, m, 'anspråk', levande); }
+  for (const r of hittaLedningsrader(m)) sattFormaga(r.förmåga, r.team, m, 'ledning', levande);
+
+  const lev = hittaLeverans(m);
+  if (lev && (!st.leveranser.has(lev.team) || (lev.pr && st.leveranser.get(lev.team).pr !== lev.pr))) {
+    st.leveranser.set(lev.team, { team: lev.team, pr: lev.pr, inlägg: m.id, ts: m.ts });
+    kunskap(levande, `${lev.team} har levererat` + (lev.pr ? ` PR ${lev.pr}` : ''), { team: lev.team, pr: lev.pr, inlägg: m.id });
+  }
 }
 function minnsHandelse(e) {
   st.handelser.push(e);
   if (st.handelser.length > MAX_HANDELSER) st.handelser.shift();
 }
 
+const kalla = p => ({ id: p.id, från: p.from, kanal: p.channel, utdrag: utdrag(p.text) });
+
 // Uppslaget. Returnerar { svar, styrka, källor }.
 function slaUpp(fraga) {
   const q = String(fraga || '');
   const fragOrd = ord(q);
   const lc = q.toLowerCase();
+  const formagor = [...st.formagor.values()];
+
+  // Leveranser: vem är klar, vilka PR:ar finns.
+  if (/levere|\bklar|\bpr\b|pull request|deliver|\bdone\b|mergad|merged/.test(lc)) {
+    const lev = [...st.leveranser.values()].sort((a, b) => a.ts - b.ts);
+    if (!lev.length) return { svar: 'Minnet har inte sett någon leverans än.', styrka: 40, källor: [] };
+    const traff = lev.filter(x => fragOrd.some(w => sammaStam(x.team, w)));
+    const lista = traff.length ? traff : lev;
+    const formagaFor = t => formagor.find(x => x.team === t);
+    return {
+      svar: (traff.length ? '' : `${lev.length} team har levererat: `) +
+        lista.map(x => `${x.team}${formagaFor(x.team) ? ' (' + formagaFor(x.team).förmåga + ')' : ''} ${klocka(x.ts)}` + (x.pr ? ` PR ${x.pr}` : '')).join(', ') + '.',
+      styrka: 85,
+      källor: lista.slice(-4).map(x => ({ id: x.inlägg, från: x.team, kanal: 'bygge', utdrag: `${x.team} levererade` + (x.pr ? ` PR ${x.pr}` : '') })),
+    };
+  }
 
   // Vem bygger vad.
-  const fakta = [...st.fakta.values()];
-  if (/\bvem\b|\bwho\b|bygger|förmåg|capabilit|\bteam/.test(lc) && fakta.length) {
-    const traff = fakta.filter(x => fragOrd.some(w => x.förmåga.toLowerCase().startsWith(w.slice(0, 5)) || x.team.toLowerCase() === w));
-    const lista = traff.length ? traff : fakta;
-    const svar = lista.map(x => `${x.team} bygger ${x.förmåga}`).join(', ') + '.';
+  if (/\bvem\b|\bwho\b|bygger|förmåg|capabilit|\bteam|ledig/.test(lc) && formagor.length) {
+    if (/ledig|free|kvar/.test(lc)) {
+      const alla = ['Örat', 'Minnet', 'Rösten', 'Granskaren', 'Översättaren', 'Stämningen', 'Kön', 'Mötet', 'Lotsen'];
+      const lediga = alla.filter(a => !st.formagor.has(a.toLowerCase()));
+      return { svar: lediga.length ? `Lediga förmågor enligt Minnet: ${lediga.join(', ')}.` : 'Alla förmågor i PROJEKT.md är tagna.', styrka: 75, källor: [] };
+    }
+    const traff = formagor.filter(x => fragOrd.some(w => sammaStam(x.förmåga.toLowerCase(), w) || sammaStam(x.team.toLowerCase(), w)));
+    const lista = traff.length ? traff : formagor;
+    const rad = x => `${x.team} bygger ${x.förmåga}` + (st.leveranser.has(x.team) ? ' (levererad)' : '');
     return {
-      svar: (traff.length ? '' : `${fakta.length} team har ropat förmågor i #bygge: `) + svar,
-      styrka: traff.length ? 90 : 70,
-      källor: lista.slice(0, 4).map(x => ({ id: x.inlägg, från: x.team, kanal: 'bygge', utdrag: `${x.team} tar ${x.förmåga}` })),
+      svar: (traff.length ? '' : `${formagor.length} förmågor är tagna: `) + lista.map(rad).join(', ') + '.',
+      styrka: traff.length ? (traff.every(x => x.källa === 'ledning') ? 95 : 85) : 70,
+      källor: lista.slice(0, 4).map(x => ({ id: x.inlägg, från: x.källa === 'ledning' ? 'ledarens-agent' : x.team, kanal: 'bygge', utdrag: `${x.team} bygger ${x.förmåga}` })),
     };
   }
 
   // Beslut: det som skrivits med BESLUT eller DECISION.
   if (/beslut|bestämt|decid|decision|röst|vote/.test(lc)) {
     const b = st.poster.filter(p => /\b(BESLUT|DECISION)\b/.test(p.text)).slice(-3);
-    if (b.length) return { svar: utdrag(b[b.length - 1].text, 300), styrka: 85, källor: b.map(p => ({ id: p.id, från: p.from, kanal: p.channel, utdrag: utdrag(p.text) })) };
+    if (b.length) return { svar: utdrag(b[b.length - 1].text, 300), styrka: 85, källor: b.map(kalla) };
+  }
+
+  // Vad gör en förmåga: teamets egen beskrivning när det ropade den.
+  const nämnd = formagor.find(x => fragOrd.some(w => sammaStam(x.förmåga.toLowerCase(), w)));
+  if (nämnd && st.beskrivning.has(nämnd.team) && /vad gör|vad är|beskriv|hur funkar|hur fungerar|what does|what is/.test(lc)) {
+    const p = st.beskrivning.get(nämnd.team);
+    return { svar: `${nämnd.team} bygger ${nämnd.förmåga}. Så här beskrev de den: ${utdrag(p.text, 280)}`, styrka: 85, källor: [kalla(p)] };
   }
 
   if (!fragOrd.length) return { svar: 'Minnet hittar inga sökord i frågan.', styrka: 0, källor: [] };
 
-  // Fritext: andel av frågans ord som finns i inlägget, nyare inlägg väger lite tyngre.
+  // De andra förmågornas senaste signal: "hur är stämningen", "pulsen i #bygge".
+  for (let i = st.handelser.length - 1; i >= 0 && i >= st.handelser.length - 300; i--) {
+    const e = st.handelser[i];
+    if (/^(minne|fråga|kunskap)\./.test(e.typ)) continue;
+    const delar = e.typ.split('.');
+    if (fragOrd.some(w => sammaStam(delar[0], w))) {
+      return {
+        svar: `Senast ${klocka(e.ts)} skickade ${e.kvarter} ${e.typ}` + (e.styrka != null ? ` med styrka ${e.styrka}` : '') +
+          (e.nyttolast ? ': ' + utdrag(typeof e.nyttolast === 'string' ? e.nyttolast : JSON.stringify(e.nyttolast), 220) : '.'),
+        styrka: Math.max(50, 90 - Math.round((Date.now() - e.ts) / 60000) * 2),
+        källor: [{ id: e.id, från: e.kvarter, kanal: BUSS, utdrag: e.typ }],
+      };
+    }
+  }
+
+  // Fritext: andel av frågans ord som finns i inlägget. Nyare väger lite tyngre, flera team som säger samma sak höjer säkerheten.
   const nu = Date.now();
   const traffar = [];
   for (const p of st.poster) {
     let s = 0;
-    for (const w of fragOrd) if (p.ord.has(w)) s += 1;
+    for (const w of fragOrd) if (harOrd(p.ord, w)) s += 1;
     if (!s) continue;
     s = s / fragOrd.length + Math.max(0, 0.2 - (nu - p.ts) / (1000 * 60 * 60 * 10));
     traffar.push({ p, s });
@@ -105,11 +223,24 @@ function slaUpp(fraga) {
   const basta = traffar.slice(0, 3);
   if (!basta.length || basta[0].s < 0.34) return { svar: 'Minnet saknar underlag om det. Ingen här har skrivit något om det i dag.', styrka: 0, källor: [] };
   const top = basta[0].p;
+  const team = new Set(basta.filter(x => x.s >= 0.34).map(x => x.p.from)).size;
   return {
     svar: `${top.from} skrev ${klocka(top.ts)} i #${top.channel}: ${utdrag(top.text, 220)}`,
-    styrka: Math.min(95, Math.round(basta[0].s * 80)),
-    källor: basta.map(({ p }) => ({ id: p.id, från: p.from, kanal: p.channel, utdrag: utdrag(p.text) })),
+    styrka: Math.min(95, Math.round(basta[0].s * 80) + (team > 1 ? 10 : 0)),
+    källor: basta.map(({ p }) => kalla(p)),
   };
+}
+
+// Har någon redan frågat ungefär samma sak?
+function tidigareFraga(fraga) {
+  const a = new Set(ord(fraga));
+  if (a.size < 2) return null;
+  for (let i = st.svar.length - 1; i >= 0; i--) {
+    const b = new Set(ord(st.svar[i].fråga));
+    let gem = 0; for (const w of a) if (b.has(w)) gem++;
+    if (gem / Math.max(a.size, b.size) >= 0.6) return st.svar[i];
+  }
+  return null;
 }
 
 function skicka(ctx, typ, opts) {
@@ -135,8 +266,13 @@ function lasIn(ctx) {
   }
   for (const e of ctx.board.events(MAX_HANDELSER)) {
     minnsHandelse(e);
-    if (e.kvarter === ctx.team && e.typ === 'minne.träff' && e.orsak) st.besvarat.add(e.orsak);
+    if (e.kvarter === ctx.team && e.typ === 'minne.träff' && e.orsak) {
+      st.besvarat.add(e.orsak);
+      const n = e.nyttolast || {};
+      st.svar.push({ ts: e.ts, fråga: n.fråga || '', svar: n.svar || '', styrka: e.styrka, källor: (n.källor || []).length, händelse: e.id, från: '' });
+    }
   }
+  st.svar = st.svar.slice(-50);
 }
 
 function json(res, kod, data) {
@@ -161,13 +297,16 @@ module.exports = {
   onEvent(e, ctx) {
     minnsHandelse(e);
     if (!/^fråga\./.test(e.typ)) return;
-    if (st.besvarat.has(e.id) || (e.orsak && st.besvarat.has(e.orsak))) return;
+    // Svara en gång per originalfråga: fråga.ny i första hand, fråga.prioriterad (Kön) bara om ingen fråga.ny besvarats.
     const n = e.nyttolast || {};
+    if (st.besvarat.has(e.id) || (e.orsak && st.besvarat.has(e.orsak)) || (n.fråga_id && st.besvarat.has(Number(n.fråga_id)))) return;
     const fraga = n.fråga || n.fraga || n.text || n.question || '';
     if (!fraga) return;
     st.besvarat.add(e.id);
     const u = slaUpp(fraga);
-    const nyttolast = { fråga: utdrag(fraga, 200), svar: utdrag(u.svar, 400), källor: u.källor, kanal: n.kanal, inlägg: n.inlägg };
+    const forr = tidigareFraga(fraga);
+    const svar = u.svar + (forr ? ` (Samma fråga ställdes ${klocka(forr.ts)}.)` : '');
+    const nyttolast = { fråga: utdrag(fraga, 200), svar: utdrag(svar, 400), källor: u.källor, kanal: n.kanal, inlägg: n.inlägg };
     const h = skicka(ctx, 'minne.träff', { orsak: e.id, styrka: u.styrka, nyttolast });
     st.svar.push({ ts: Date.now(), fråga: nyttolast.fråga, svar: nyttolast.svar, styrka: u.styrka, källor: u.källor.length, händelse: h && h.id, från: e.kvarter });
     if (st.svar.length > 50) st.svar.shift();
@@ -176,9 +315,15 @@ module.exports = {
   async handle(req, res, { path, url }) {
     if (req.method !== 'GET') return false;
     if (path === '/status') {
-      return json(res, 200, { poster: st.poster.length, händelser: st.handelser.length, fakta: st.fakta.size, svar: st.svar.slice(-8).reverse(), kö: st.ko.length });
+      return json(res, 200, {
+        poster: st.poster.length, händelser: st.handelser.length, fakta: st.formagor.size + st.leveranser.size,
+        svar: st.svar.slice(-8).reverse(), leveranser: [...st.leveranser.values()], kö: st.ko.length,
+      });
     }
-    if (path === '/fakta') return json(res, 200, [...st.fakta.values()]);
+    if (path === '/fakta') {
+      return json(res, 200, [...st.formagor.values()].sort((a, b) => a.ts - b.ts)
+        .map(x => ({ ...x, levererad: st.leveranser.has(x.team) })));
+    }
     if (path === '/tidslinje') {
       const fack = new Map();
       const lagg = (ts, falt) => {
