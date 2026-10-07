@@ -368,8 +368,7 @@ function tidigareFraga(fraga, svar) {
   return null;
 }
 
-// Servern tillåter 6 händelser per minut och kvarter. Minnet räknar sina egna.
-const TAK_PER_MINUT = 6;
+// Servern tillåter 6 händelser per minut och kvarter. Minnet räknar sina egna och ger svaren företräde.
 const KUNSKAP_TAK = 2; // kunskap.ny skickas bara när högst så här många gått ut senaste minuten: svar har företräde
 function senasteMinuten() { const nu = Date.now(); st.takt = st.takt.filter(t => nu - t < 60000); return st.takt.length; }
 function skicka(ctx, typ, opts) {

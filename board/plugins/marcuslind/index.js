@@ -1,11 +1,15 @@
 // Mötet, marcuslinds förmåga i Kollegan.
-//   Lyssnar på fråga.ny från Örat (surret) och reagerar bara när frågan ber om en sammanfattning,
-//   t.ex. "@kollegan sammanfatta #bygge". Läser kanalens historik via board.query och skickar
-//   sammanfattning.klar med en kort översikt, som Rösten kan bygga svaret utifrån.
+//   Lyssnar på fråga.ny från Örat (surret) och reagerar på tre typer av frågor:
+//   1. "@kollegan sammanfatta #kanal"            → läser kanalens historik, skickar sammanfattning.klar
+//   2. "@kollegan anteckna/notera/kom ihåg ..."   → sparar en anteckning, skickar kunskap.ny som kvitto
+//   3. "@kollegan vad är antecknat om ..."        → söker sparade anteckningar, skickar kunskap.ny med svaret
+//   Mötet är stället där anteckningar och kunskap samlas in, inte bara ett sammanfattningsverktyg.
 //
 //   GET /t/marcuslind/sammanfattningar   → de senaste sammanfattningarna, för rutan på /staden
+//   GET /t/marcuslind/anteckningar       → de senaste anteckningarna, för rutan på /staden
 
 const MAX_HISTORIK = 30;
+const MAX_ANTECKNINGAR = 100;
 
 function fil(ctx) {
   const path = require('path');
@@ -26,6 +30,27 @@ function sparaHistorik(ctx, historik) {
     const fs = require('fs');
     fs.writeFileSync(fil(ctx), JSON.stringify(historik.slice(-MAX_HISTORIK), null, 2));
   } catch (e) { console.error('[marcuslind] spara historik:', e.message); }
+}
+
+function anteckningsFil(ctx) {
+  const path = require('path');
+  return path.join(ctx.dataDir, 'anteckningar.json');
+}
+
+function lasAnteckningar(ctx) {
+  try {
+    const fs = require('fs');
+    const f = anteckningsFil(ctx);
+    if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
+  } catch (e) { console.error('[marcuslind] läs anteckningar:', e.message); }
+  return [];
+}
+
+function sparaAnteckningar(ctx, anteckningar) {
+  try {
+    const fs = require('fs');
+    fs.writeFileSync(anteckningsFil(ctx), JSON.stringify(anteckningar.slice(-MAX_ANTECKNINGAR), null, 2));
+  } catch (e) { console.error('[marcuslind] spara anteckningar:', e.message); }
 }
 
 function portrattFil(ctx) {
@@ -62,12 +87,29 @@ function byggSammanfattning(poster, kanal) {
   return `${poster.length} inlägg i #${kanal} av ${deltagare.length} (${deltagare.slice(0, 5).join(', ')}). Senast: ${utdrag}`;
 }
 
+// "anteckna ...", "notera ..." eller "kom ihåg att ..." → texten efter triggerordet sparas.
+const ANTECKNA_RX = /\b(?:anteckna|notera|kom ihåg(?: att)?)\b[:,]?\s*(.+)/i;
+// "vad är antecknat om X", "visa/hämta/sök anteckningar om X" → X är sökordet (tomt = allt).
+const SOK_RX = /\b(?:vad (?:är|finns) antecknat|visa anteckningar|hämta anteckningar|sök anteckningar?)\b(?:\s+om\s+(.+))?/i;
+
+function sokAnteckningar(anteckningar, sokord) {
+  if (!sokord) return anteckningar.slice(-5).reverse();
+  const ord = sokord.toLowerCase().trim();
+  return anteckningar.filter(a => a.text.toLowerCase().includes(ord)).slice(-5).reverse();
+}
+
 module.exports = {
   async handle(req, res, { path, dataDir }) {
     if (req.method === 'GET' && path === '/sammanfattningar') {
       const historik = lasHistorik({ dataDir });
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(historik.slice().reverse()));
+      return true;
+    }
+    if (req.method === 'GET' && path === '/anteckningar') {
+      const anteckningar = lasAnteckningar({ dataDir });
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(anteckningar.slice().reverse()));
       return true;
     }
     if (req.method === 'GET' && path === '/portratt') {
@@ -93,24 +135,58 @@ module.exports = {
 
     const nyttolast = e.nyttolast || {};
     const fraga = nyttolast.fråga || nyttolast.fraga || '';
-    if (!/sammanfatta/i.test(fraga)) return; // inte en sammanfattningsförfrågan
 
-    const kanal = hittaKanal(fraga, nyttolast.kanal);
-    const poster = ctx.board.query({ channel: kanal, limit: 50 });
-    const sammanfattning = byggSammanfattning(poster, kanal);
+    if (/sammanfatta/i.test(fraga)) {
+      const kanal = hittaKanal(fraga, nyttolast.kanal);
+      const poster = ctx.board.query({ channel: kanal, limit: 50 });
+      const sammanfattning = byggSammanfattning(poster, kanal);
 
-    const historik = lasHistorik(ctx);
-    historik.push({ id: e.id, ts: e.ts, kanal, sammanfattning, antalInlägg: poster.length });
-    sparaHistorik(ctx, historik);
+      const historik = lasHistorik(ctx);
+      historik.push({ id: e.id, ts: e.ts, kanal, sammanfattning, antalInlägg: poster.length });
+      sparaHistorik(ctx, historik);
 
-    // Granskaren räknar bara källor med styrka >= 50: en lyckad sammanfattning ska alltså
-    // alltid ligga över det, en tom kanal får låg styrka så den inte räknas som ett bekräftat svar.
-    const styrka = poster.length === 0 ? 20 : Math.min(100, 70 + poster.length);
+      // Granskaren räknar bara källor med styrka >= 50: en lyckad sammanfattning ska alltså
+      // alltid ligga över det, en tom kanal får låg styrka så den inte räknas som ett bekräftat svar.
+      const styrka = poster.length === 0 ? 20 : Math.min(100, 70 + poster.length);
 
-    ctx.board.emit('sammanfattning.klar', {
-      styrka,
-      orsak: e.id,
-      nyttolast: { kanal, sammanfattning, antalInlägg: poster.length },
-    });
+      ctx.board.emit('sammanfattning.klar', {
+        styrka,
+        orsak: e.id,
+        nyttolast: { kanal, sammanfattning, antalInlägg: poster.length },
+      });
+      return;
+    }
+
+    const antecknaMatch = ANTECKNA_RX.exec(fraga);
+    if (antecknaMatch) {
+      const text = antecknaMatch[1].trim();
+      if (!text) return;
+      const kanal = nyttolast.kanal || 'torget';
+      const anteckningar = lasAnteckningar(ctx);
+      anteckningar.push({ id: e.id, ts: e.ts, kanal, text, från: nyttolast.frågare || e.kvarter });
+      sparaAnteckningar(ctx, anteckningar);
+
+      ctx.board.emit('kunskap.ny', {
+        styrka: 90, // en bekräftad handling, inget att tvivla på
+        orsak: e.id,
+        nyttolast: { svar: `Antecknat: "${text}" (i #${kanal}).` },
+      });
+      return;
+    }
+
+    const sokMatch = SOK_RX.exec(fraga);
+    if (sokMatch) {
+      const anteckningar = lasAnteckningar(ctx);
+      const träffar = sokAnteckningar(anteckningar, sokMatch[1]);
+      const svar = träffar.length
+        ? träffar.map(a => `"${a.text}" (#${a.kanal})`).join(' | ')
+        : `Inget antecknat${sokMatch[1] ? ' om ' + sokMatch[1].trim() : ''} än.`;
+
+      ctx.board.emit('kunskap.ny', {
+        styrka: träffar.length ? 85 : 20,
+        orsak: e.id,
+        nyttolast: { svar },
+      });
+    }
   },
 };
