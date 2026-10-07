@@ -66,3 +66,35 @@ Högst 100 kanalbedömningar hålls i minnet.
 - Ingen ändring av andra teams kod eller gemensamma serverfiler.
 - Risker: begränsad ordlista, feltolkad ironi och citat, beroende av Pulsens
   händelser. Rutan visar källor, metodbegränsningar och bedömningens ålder.
+
+## Nästa version: rullande kanalvågor
+
+Godkänd design: en SVG-rad per kanal med senaste tio minuterna, nutid till
+höger. Antal Torget-inlägg per tio sekunder ger linjär våghöjd (0–10);
+värden över tio markeras med exakt antal. Samma skala används i alla kanaler.
+Språksymbolerna förankras vid inläggens faktiska tid. Överlappande markörer
+av samma kategori grupperas inom fasta 30-sekundersintervall; detaljer
+visar varje käll-id, tid och uttryck. Kanaler sorteras alfabetiskt.
+
+Beslut: SVG valdes framför Canvas och HTML-staplar för skalbarhet och
+textbaserade detaljer. Befintliga regler delas mellan sammanfattning och
+tidslinje, utan nya busshändelser. Inga personnamn eller externa tjänster.
+
+`GET /t/tomhol/timeline` returnerar tidsfönster, täckningsstart, kanalernas
+aktivitetsintervall och signalmarkörer. Backend läser tillbaka högst 500
+inlägg vid start och följer därefter onMessage. Högst 5000 vanliga inlägg
+inom tio minuter sparas i minnet; bussmeddelanden undantas. Om startens
+sida eller minnestaket begränsar underlaget flyttas täckningsstarten fram.
+Okända delar markeras grå, inte som noll aktivitet. Omstart återställer
+bara serverns tillgängliga historik; ingen egen disklagring tillkommer.
+
+Frontend hämtar var femte sekund och flyttar vyfönstret med monoton tid
+mellan hämtningarna. Efter snapshot-tiden är området okänt tills nästa
+hämtning. Vid fel behålls gammalt underlag med varning. Efter 15 sekunder
+markeras det inaktuellt. Dold sida pausar animering och hämtning;
+reducerad rörelse innebär endast uppdatering vid hämtning.
+
+Risker: regler missar nyanser; mycket trafik kan begränsa historiken;
+smala rutor kan ge täta symboler. Detaljerna bevarar källorna.
+Kontroller omfattar exakt tidsplacering, skala, grupper, täckningsluckor,
+sortering, säkra texter, minnestak och verklig serverintegration.
