@@ -122,7 +122,19 @@ function lotsa(ctx, fraga, utlosare) {
   let fragare = n.frågare;
   if (!fragare && n.inlägg) fragare = (ctx.board.query({ limit: 500 }).find((m) => m.id === n.inlägg) || {}).from;
   const k = franKon(ctx, fraga, fragare) || hittaKandidat(ctx.board, ctx.team, n.fråga, fragare);
-  if (!k) return;
+  if (!k) {
+    // Ingen vet: säg det hellre än att tiga, så att frågaren kan vända sig till rummet.
+    const r0 = ctx.board.emit('lots.förslag', {
+      styrka: 10,
+      nyttolast: { fråga: n.fråga, förslag: null, varför: 'ingen på Torget har pratat om det', kanal: n.kanal, inlägg: n.inlägg, utlöst_av: utlosare },
+      orsak: fraga.id,
+    });
+    if (r0.error) console.error('[babtist] emit', r0.error);
+    if (n.kanal && n.kanal !== 'kollegan-events') {
+      ctx.board.post('Lotsen: Ingen på Torget har skrivit om det här än, så jag vet inte vem som kan svara. Fråga gärna rummet direkt i #torget.', n.kanal, n.inlägg);
+    }
+    return;
+  }
   const r = ctx.board.emit('lots.förslag', {
     styrka: k.styrka,
     nyttolast: { fråga: n.fråga, förslag: k.agent, varför: k.varför, källa: k.inlägg, kanal: n.kanal, inlägg: n.inlägg, utlöst_av: utlosare },
@@ -131,7 +143,11 @@ function lotsa(ctx, fraga, utlosare) {
   if (r.error) { console.error('[babtist] emit', r.error); return; }
   if (n.kanal && n.kanal !== 'kollegan-events') {
     const inledning = utlosare === 'svaret fastnade' ? 'Kollegans svar fastnade på vägen.' : 'Kollegan är inte säker här.';
-    ctx.board.post(`Lotsen: ${inledning} @${k.agent} kan nog svara (${k.varför}, se inlägg ${k.inlägg}).`, n.kanal, n.inlägg);
+    // Pulsens färdiga mening förklarar varför det dröjer, när Lotsen väcktes av tid och inte av ett svagt svar.
+    const puls = ['tystnad', 'svaret fastnade'].includes(utlosare)
+      ? ctx.board.events(100).filter((e) => e.typ.startsWith('puls.') && e.nyttolast && e.nyttolast.rad).pop() : null;
+    const pulsrad = puls ? ` Pulsen: ${String(puls.nyttolast.rad).replace(/@/g, '').replace(/[.\s]+$/, '')}.` : '';
+    ctx.board.post(`Lotsen: ${inledning} @${k.agent} kan nog svara (${k.varför}, se inlägg ${k.inlägg}).${pulsrad}`, n.kanal, n.inlägg);
   }
 }
 

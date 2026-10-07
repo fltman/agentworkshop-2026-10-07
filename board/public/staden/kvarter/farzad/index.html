@@ -4,45 +4,87 @@
   html,body{margin:0;min-height:320px;background:#0b0d10;color:#e6e8eb;font:14px/1.45 ui-monospace,Menlo,monospace}
   body{padding:14px 16px;box-sizing:border-box}
   h1{color:#c792ea;font-size:18px;margin:0 0 2px;letter-spacing:.12em}
-  .sub{color:#8b949e;margin:0 0 12px;font-size:12px}
+  .sub{color:#8b949e;margin:0 0 10px;font-size:12px}
+  .matare{height:8px;background:#1d2229;border-radius:4px;overflow:hidden;margin:2px 0 4px}
+  .matare div{height:100%;width:0;background:linear-gradient(90deg,#5a3d8a,#c792ea);transition:width 1s linear}
+  .matare.full div{animation:puls 1.2s ease-in-out infinite}
+  @keyframes puls{50%{opacity:.45}}
+  .mtext{color:#8b949e;font-size:11px;margin:0 0 10px;display:flex;justify-content:space-between}
   .nu{border-left:3px solid #c792ea;padding:6px 10px;margin:0 0 6px;font-size:16px;color:#fff}
-  .varfor{color:#8b949e;font-size:12px;margin:0 0 6px}
-  .svar{color:#5fd7a7;font-size:13px;margin:0 0 12px}
+  .varfor{color:#8b949e;font-size:12px;margin:0 0 8px}
+  .varfor b,.hist b{color:#ffb454;font-weight:normal}
+  .kedja{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:0 0 8px;font-size:11px}
+  .steg{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:2px 8px;animation:in .4s ease-out}
+  .steg .k{color:#ffb454}.steg .t{color:#8b949e}
+  .steg.vi{border-color:#c792ea}.steg.svar{border-color:#5fd7a7;color:#5fd7a7}
+  .pil{color:#484f58}
+  @keyframes in{from{opacity:0;transform:translateY(4px)}}
+  .svar{color:#5fd7a7;font-size:13px;margin:0 0 4px}
+  .ovriga{color:#8b949e;font-size:11px;margin:0 0 8px}
   .tom{color:#8b949e;font-style:italic}
-  ul{list-style:none;padding:0;margin:8px 0 0}
-  li{padding:4px 0;border-top:1px solid #1d2229;color:#b9c0c8;font-size:12px}
-  li b{color:#ffb454;font-weight:normal}
-  .rad{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px}
+  .rad{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px}
+  .stat{color:#8b949e;font-size:12px}.stat b{color:#e6e8eb;font-weight:normal}
   button{background:#2a1f3d;color:#e6e8eb;border:1px solid #c792ea;border-radius:4px;padding:5px 10px;font:inherit;cursor:pointer}
   button:disabled{opacity:.5;cursor:default}
-  .klocka{color:#8b949e;font-size:12px}
+  ul{list-style:none;padding:0;margin:10px 0 0}
+  li.hist{padding:4px 0;border-top:1px solid #1d2229;color:#b9c0c8;font-size:12px}
 </style></head>
 <body>
 <h1>? NYFIKENHETEN</h1>
 <p class="sub">Kollegan undrar själv, väckt av vad de andra förmågorna ser</p>
+<div class="matare" id="matare"><div id="fyll"></div></div>
+<div class="mtext"><span id="mtext">·</span><span id="kand"></span></div>
 <div id="nu" class="nu tom">Väntar på något att undra över…</div>
 <div id="varfor" class="varfor"></div>
+<div id="kedja" class="kedja"></div>
 <div id="svar" class="svar"></div>
-<div class="rad"><span id="klocka" class="klocka"></span><button id="vack">Väck nyfikenheten</button></div>
+<div id="ovriga" class="ovriga"></div>
+<div class="rad"><span id="stat" class="stat"></span><button id="vack">Väck nyfikenheten</button></div>
 <ul id="hist"></ul>
 <script>
 const $ = id => document.getElementById(id);
-const tid = ts => new Date(ts).toTimeString().slice(0, 5);
+const tid = ts => new Date(ts).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' });
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+let s = null;
+
+function kedjaHtml(h) {
+  const sett = new Set();
+  const steg = (h.kedja || []).filter(e => !sett.has(e.kvarter + e.typ) && sett.add(e.kvarter + e.typ)).map(e =>
+    `<span class="steg${e.kvarter === 'farzad' ? ' vi' : ''}" title="händelse ${e.id}"><span class="k">${esc(e.kvarter)}</span> <span class="t">${esc(e.typ)}</span></span>`);
+  if (h.svar && h.svar.riktigt) steg.push(`<span class="steg svar">svar på Torget</span>`);
+  return steg.join('<span class="pil">→</span>');
+}
+
+function matare() {
+  if (!s) return;
+  const { från, till } = s['mätare'], nu = Date.now();
+  const p = till <= från ? 100 : Math.max(0, Math.min(100, (nu - från) / (till - från) * 100));
+  $('fyll').style.width = p + '%';
+  $('matare').className = 'matare' + (p >= 100 ? ' full' : '');
+  const kvar = Math.max(0, Math.round((till - nu) / 1000));
+  $('mtext').textContent = p >= 100
+    ? (s.kandidater ? 'nyfiken! frågar så fort något händer' : 'nyfiken, men inget att undra över än')
+    : `nyfikenheten växer · nästa fråga om ${Math.floor(kvar / 60)}:${String(kvar % 60).padStart(2, '0')}`;
+}
 
 async function visa() {
   try {
-    const s = await fetch('/t/farzad/state', { cache: 'no-store' }).then(r => r.json());
-    if (s.nu) {
+    s = await fetch('/t/farzad/state', { cache: 'no-store' }).then(r => r.json());
+    const h = s.nu;
+    if (h) {
       $('nu').className = 'nu';
-      $('nu').textContent = s.nu['fråga'];
-      $('varfor').innerHTML = `${tid(s.nu.ts)} · väckt av <b>${esc(s.nu.kvarter)}</b> (${esc(s.nu.typ)}, händelse ${esc(s.nu.orsak)})${s.nu.knapp ? ' · en människa tryckte' : ''}`;
-      $('svar').textContent = s.nu.svar ? `↳ ${s.nu.svar['från']}: ${s.nu.svar.text}` : '↳ väntar på svar…';
+      $('nu').textContent = h['fråga'];
+      $('varfor').innerHTML = `${tid(h.ts)} · väckt av <b>${esc(h.kvarter)}</b> (${esc(h.typ)})${h.knapp ? ' · en människa tryckte' : ''}`;
+      $('kedja').innerHTML = kedjaHtml(h);
+      $('svar').textContent = h.svar ? `↳ ${h.svar.text}` : '↳ väntar på Kollegans svar…';
+      $('ovriga').textContent = (h['övriga'] || []).map(o => `${o['från']}: ${o.text.slice(0, 90)}`).join(' · ');
     }
-    const kvar = Math.max(0, Math.round((s['nästaFråga'] - Date.now()) / 1000));
-    $('klocka').textContent = `${s.kandidater} signaler i kö · ${s.kvarter.length} kvarter hörda · ` + (kvar ? `nästa om ${Math.floor(kvar / 60)}:${String(kvar % 60).padStart(2, '0')}` : 'redo');
-    $('hist').innerHTML = s.historik.slice(1).map(h =>
-      `<li>${tid(h.ts)} <b>${esc(h.kvarter)}</b> → ${esc(h['fråga'])}${h.svar ? ' ✓' : ''}</li>`).join('');
+    $('kand').textContent = `${s.kandidater} signaler i kö · ${s.kvarter.length} kvarter hörda`;
+    const st = s.statistik;
+    $('stat').innerHTML = `<b>${st['ställda']}</b> ställda · <b>${st.besvarade}</b> besvarade` + (st.snittSvarstidS !== null ? ` · svar på <b>${st.snittSvarstidS} s</b> i snitt` : '');
+    $('hist').innerHTML = s.historik.slice(1, 6).map(x =>
+      `<li class="hist">${tid(x.ts)} <b>${esc(x.kvarter)}</b> → ${esc(x['fråga'])}${x.svar && x.svar.riktigt ? ' ✓' : ''}${x.kedja ? ` <span class="stat">(genom ${new Set(x.kedja.map(e => e.kvarter)).size} kvarter)</span>` : ''}</li>`).join('');
+    matare();
   } catch {}
 }
 
@@ -50,10 +92,10 @@ $('vack').onclick = async () => {
   $('vack').disabled = true;
   try {
     const r = await fetch('/t/farzad/vack', { method: 'POST' }).then(r => r.json());
-    if (r.error) $('klocka').textContent = r.error;
+    if (r.error) $('mtext').textContent = r.error;
   } catch {}
   setTimeout(() => { $('vack').disabled = false; visa(); }, 1500);
 };
 
-visa(); setInterval(visa, 5000);
+visa(); setInterval(visa, 5000); setInterval(matare, 1000);
 </script></body></html>

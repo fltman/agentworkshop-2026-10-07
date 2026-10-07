@@ -112,11 +112,13 @@ function ritaKurva(historik, styrka) {
   });
 }
 
-// Ateljén målar kvarteren. Bilden hängs upp när den finns, annars syns ingen tom ram.
-// Vi provar också ateljéns standardplats, ifall bild.klar hunnit passera innan vi startade.
+// Ateljén målar kvarteren. På /staden sätter ramen porträttet som hero-bild ovanför oss, så där
+// vore en egen kopia bara en dubblett. Öppnar någon rutan fristående finns ingen ram, och då
+// hänger vi upp bilden själva.
 let portrattVisat = false;
+const iRam = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
 function visaPortratt(p) {
-  if (portrattVisat) return;
+  if (portrattVisat || iRam) return;
   const url = (p && p.url) || '/t/ateljen/bild/team-martin/portratt.jpg';
   if (!url.startsWith('/')) return;
   const el = $('portratt');
