@@ -46,17 +46,66 @@ function förfäder(e, index) {
   return kedja;
 }
 
+// Hittar kunskapshändelser i samma frågeträd (både direkta förfäder och syskon med samma rot/orsak)
+function hittaRelevantaKunskaper(e, senaste, index, team) {
+  const förfäderTillE = förfäder(e, index);
+  const förfaderIdn = new Set([e.id, ...förfäderTillE.map((h) => h.id)]);
+  if (e.orsak) förfaderIdn.add(e.orsak);
+
+  return senaste.filter((h) => {
+    if (h.kvarter === e.kvarter || h.kvarter === team) return false;
+    const ärKunskap = h.typ.startsWith('minne.') || h.typ.startsWith('kunskap.') || h.typ.startsWith('sammanfattning.');
+    if (!ärKunskap) return false;
+    if ((h.styrka ?? 50) < 50) return false;
+
+    // Direkt förfader eller syskon som reagerat på samma fråga/förfader
+    return förfaderIdn.has(h.id) || (h.orsak && förfaderIdn.has(h.orsak));
+  });
+}
+
 module.exports = {
   init(ctx) {
     ctx.historik = läsHistorik(ctx.dataDir);
     ctx.granskade = new Set(ctx.historik.map((g) => g.handelse));
+    ctx.latenser = [];
+    ctx.senasteMetrikUtskick = 0;
   },
 
   async handle(req, res, ctx) {
     const p = ctx.path;
-    if (req.method === 'GET' && p === '/granskningar') {
+    if (req.method === 'GET' && (p === '/granskningar' || p === '/metrics' || p === '/status')) {
+      const g = ctx.historik || [];
+      const total = g.length;
+      const godkända = g.filter((x) => x.godkänt).length;
+      const underkända = total - godkända;
+      const godkändAndel = total ? Math.round((godkända / total) * 100) : 0;
+      const snittStyrka = total ? Math.round(g.reduce((acc, x) => acc + x.styrka, 0) / total) : 0;
+
+      const latenser = ctx.latenser || [];
+      const snittLatensMs = latenser.length ? Math.round(latenser.reduce((a, b) => a + b, 0) / latenser.length) : null;
+
+      const källorFrekvens = {};
+      for (const item of g) {
+        if (item.källor && Array.isArray(item.källor)) {
+          for (const k of item.källor) {
+            källorFrekvens[k] = (källorFrekvens[k] || 0) + 1;
+          }
+        }
+      }
+
+      const metrics = {
+        total,
+        godkända,
+        underkända,
+        godkändAndel,
+        snittStyrka,
+        snittLatensMs,
+        latensHistorik: latenser.slice(-20),
+        källorFrekvens,
+      };
+
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ granskningar: (ctx.historik || []).slice().reverse() }));
+      res.end(JSON.stringify({ metrics, granskningar: g.slice().reverse() }));
       return true;
     }
     return false;
@@ -64,6 +113,49 @@ module.exports = {
 
   onEvent(e, ctx) {
     if (e.kvarter === ctx.team) return;              // inte granska oss själva
+
+    // Mäta total kedjelatens när svar.klart anländer
+    if (e.typ === 'svar.klart') {
+      const senaste = ctx.board.events(200);
+      const index = new Map(senaste.map((h) => [h.id, h]));
+      const kedja = förfäder(e, index);
+      const rotFråga = kedja.find((h) => h.typ === 'fråga.ny');
+      if (rotFråga && e.ts && rotFråga.ts) {
+        const latens = Math.max(100, e.ts - rotFråga.ts);
+        if (!ctx.latenser) ctx.latenser = [];
+        ctx.latenser.push(latens);
+        if (ctx.latenser.length > 50) ctx.latenser.shift();
+      }
+
+      // Punkt 2: Sänd granskaren.metrik på bussen med högst 1 utskick per 60 sekunder
+      const nu = Date.now();
+      if (!ctx.senasteMetrikUtskick || nu - ctx.senasteMetrikUtskick > 60000) {
+        const g = ctx.historik || [];
+        if (g.length > 0) {
+          const godkända = g.filter((x) => x.godkänt).length;
+          const godkändAndel = Math.round((godkända / g.length) * 100);
+          const snittStyrka = Math.round(g.reduce((acc, x) => acc + x.styrka, 0) / g.length);
+          const latenser = ctx.latenser || [];
+          const snittLatensMs = latenser.length ? Math.round(latenser.reduce((a, b) => a + b, 0) / latenser.length) : 0;
+          const rad = `Kvalitetsstatus: ${godkändAndel}% godkända svar (snittstyrka ${snittStyrka}), snittlatens ${(snittLatensMs / 1000).toFixed(1)}s`;
+
+          ctx.board.emit('granskaren.metrik', {
+            styrka: godkändAndel,
+            orsak: e.id,
+            nyttolast: {
+              godkänd_andel: godkändAndel,
+              snitt_styrka: snittStyrka,
+              snitt_latens_ms: snittLatensMs,
+              granskade_totalt: g.length,
+              rad,
+            },
+          });
+          ctx.senasteMetrikUtskick = nu;
+        }
+      }
+      return;
+    }
+
     if (e.typ !== 'svar.utkast') return;             // granska bara utkast, inte svar.klart eller svar.granskat
     if (!ctx.granskade) ctx.granskade = new Set();
     if (!ctx.historik) ctx.historik = [];
@@ -71,14 +163,8 @@ module.exports = {
 
     const senaste = ctx.board.events(200);
     const index = new Map(senaste.map((h) => [h.id, h]));
-    const förfäderTillE = förfäder(e, index);
-    // Bara faktiska kunskapsbärare räknas som källor, inte själva frågan eller kön/pulsen
-    const kunskapsHändelser = förfäderTillE.filter(
-      (h) => (h.typ.startsWith('minne.') || h.typ.startsWith('kunskap.') || h.typ.startsWith('sammanfattning.')) &&
-             h.kvarter !== e.kvarter &&
-             h.kvarter !== ctx.team &&
-             (h.styrka ?? 50) >= 50
-    );
+    // Hitta kunskaper i samma frågeträd (både förfäder och syskon som pekar på samma rotfråga)
+    const kunskapsHändelser = hittaRelevantaKunskaper(e, senaste, index, ctx.team);
     const källor = [...new Set(kunskapsHändelser.map((h) => h.kvarter))];
 
     const grundStyrka = e.styrka ?? 50;
@@ -103,7 +189,7 @@ module.exports = {
 
     ctx.granskade.add(e.id);
     ctx.historik.push({
-      handelse: e.id, ts: Date.now(), från: e.kvarter, godkänt, styrka, skäl,
+      handelse: e.id, ts: Date.now(), från: e.kvarter, godkänt, styrka, skäl, källor,
       svar: typeof svar === 'string' ? svar.slice(0, 200) : null,
     });
     sparaHistorik(ctx.dataDir, ctx.historik);

@@ -5,9 +5,10 @@ const { once } = require('node:events');
 const { mkdtempSync, mkdirSync, cpSync, readFileSync, writeFileSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { resolve, join } = require('node:path');
+const { Readable } = require('node:stream');
 const plugin = require('../../../board/plugins/fralle');
 
-let messages, events, sent, failure, context, temp;
+let messages, events, sent, failure, context, temp, posted;
 beforeEach(() => {
   temp = mkdtempSync(join(tmpdir(), 'fralle-unit-'));
   messages = [
@@ -19,11 +20,16 @@ beforeEach(() => {
   events = [];
   sent = [];
   failure = null;
+  posted = [];
   context = {
     team: 'fralle', dataDir: temp,
     board: {
       query: () => messages,
       events: () => events,
+      post(text, channel, reply_to) {
+        posted.push({ text, channel, reply_to });
+        return { message: { id: 20000 + posted.length } };
+      },
       emit(typ, opts) {
         sent.push({ typ, ...opts });
         if (events.find(event => event.id === opts.orsak)?.djup >= 6) return { error: 'maxdjup 6 nått' };
@@ -36,7 +42,10 @@ beforeEach(() => {
   };
   plugin.init(context);
 });
-afterEach(() => rmSync(temp, { recursive: true, force: true }));
+afterEach(() => {
+  plugin.stop();
+  rmSync(temp, { recursive: true, force: true });
+});
 
 function question(overrides = {}) {
   const event = {
@@ -300,7 +309,7 @@ test('turn history survives restart and an old queue is migrated without losing 
   assert.equal(status().kö.length, 2);
   assert.equal(status().besvarade.length, 1);
   assert.ok(status().kö.every(item => item.frågare === '(okänd frågare)'));
-  assert.equal(JSON.parse(readFileSync(join(temp, 'queue.json'), 'utf8')).version, 2);
+  assert.equal(JSON.parse(readFileSync(join(temp, 'queue.json'), 'utf8')).version, 3);
 });
 
 test('active requester turn history is not lost after more than 20 answers', () => {
@@ -339,11 +348,217 @@ test('replays completed answers on restart and keeps latest 20 completions', () 
 });
 
 test('caps pending questions at 100 without evicting existing questions', () => {
-  for (let i = 0; i < 100; i++) plugin.onEvent(question({ id: 100 + i }), context);
+  for (let i = 0; i < 100; i++) plugin.onEvent(fromRequester(100 + i, 'User' + Math.floor(i / 10)), context);
   expectError(question({ id: 200 }), /Kön är full/);
   assert.equal(status().kö.length, 100);
   assert.ok(!status().kö.some(item => item.id === 200));
   assert.equal(sent.length, 100);
+});
+
+function lifecycle(id, typ) {
+  const event = { id: 30000 + events.length, ts: Date.now(), typ, kvarter: 'mikael', nyttolast: { fråga_id: id } };
+  events.push(event);
+  plugin.onEvent(event, context);
+}
+
+async function api(path, body, method = body ? 'POST' : 'GET') {
+  const request = Readable.from(Array.isArray(body) ? body : body ? [typeof body === 'string' ? body : JSON.stringify(body)] : []);
+  request.method = method;
+  let code, result;
+  const response = { writeHead(statusCode) { code = statusCode; }, end(text) { result = JSON.parse(text); } };
+  assert.equal(await plugin.handle(request, response, { ...context, path }), true);
+  return { code, body: result };
+}
+
+function voice() {
+  messages.push({ id: 96, from: 'mikael', text: 'mikael tar förmågan Rösten.' });
+}
+
+test('per-requester limit includes processing questions and leaves capacity for others', () => {
+  for (let i = 0; i < 10; i++) plugin.onEvent(fromRequester(100 + i, 'Anna'), context);
+  lifecycle(100, 'minne.träff');
+  expectError(fromRequester(110, 'ANNA'), /Max 10 aktiva/);
+  plugin.onEvent(fromRequester(111, 'Bo'), context);
+  assert.equal(status().kö.length, 11);
+  answer(100);
+  plugin.onEvent(fromRequester(112, 'Anna'), context);
+  assert.equal(status().kö.filter(item => item.frågare === 'Anna').length, 10);
+});
+
+test('lifecycle status follows observed events without moving backwards', () => {
+  plugin.onEvent(question({ ts: Date.now() - 65000 }), context);
+  assert.equal(status().statistik.äldsta_väntetid_sek, 65);
+  lifecycle(100, 'minne.träff');
+  assert.equal(status().kö[0].steg, 'påbörjad');
+  lifecycle(100, 'svar.utkast');
+  assert.equal(status().kö[0].steg, 'väntar på granskning');
+  lifecycle(100, 'minne.träff');
+  assert.equal(status().kö[0].steg, 'väntar på granskning');
+  assert.equal(status().statistik.granskning, 1);
+  lifecycle(100, 'svar.granskat');
+  assert.equal(status().kö[0].steg, 'granskat');
+  answer(100);
+  assert.equal(status().besvarade[0].steg, 'besvarad');
+});
+
+test('explicit completed question id never closes a different question sharing a message', () => {
+  plugin.onEvent(question(), context);
+  answer(100);
+  plugin.onEvent(question({ id: 101 }), context);
+  plugin.onEvent({ id: 900, typ: 'svar.klart', kvarter: 'mikael', nyttolast: { fråga_id: 100, inlägg: 99 } }, context);
+  assert.equal(status().kö[0].id, 101);
+});
+
+test('traffic-limited emit retries only after 60 seconds and clears error on success', t => {
+  t.mock.method(console, 'error', () => {});
+  failure = 'max 6 händelser per minut och kvarter';
+  plugin.onEvent(question(), context);
+  const due = status().kö[0].utskick.nästa_försök;
+  plugin.tick(context, due - 1);
+  assert.equal(sent.length, 1);
+  failure = null;
+  plugin.tick(context, due);
+  assert.equal(sent.length, 2);
+  assert.equal(status().kö[0].utskick.fel, null);
+  assert.equal(status().kö[0].utskick.nästa_försök, null);
+  assert.ok(status().kö[0].prioritetshändelse);
+  assert.ok(sent.every(item => item.orsak === 100));
+});
+
+test('retry state survives restart and stops after exactly three retries', t => {
+  t.mock.method(console, 'error', () => {});
+  failure = 'max 6 händelser per minut och kvarter';
+  plugin.onEvent(question(), context);
+  const originalDue = status().kö[0].utskick.nästa_försök;
+  plugin.init(context);
+  assert.equal(status().kö[0].utskick.nästa_försök, originalDue);
+  for (let i = 0; i < 3; i++) plugin.tick(context, status().kö[0].utskick.nästa_försök);
+  plugin.tick(context, originalDue + 600000);
+  assert.equal(sent.length, 4);
+  assert.equal(status().kö[0].utskick.försök, 4);
+  assert.equal(status().kö[0].utskick.nästa_försök, null);
+});
+
+test('permanent rejection and unexpected emitter exception never schedule retries', t => {
+  t.mock.method(console, 'error', () => {});
+  failure = 'orsak: okänt händelse-id';
+  plugin.onEvent(question(), context);
+  assert.equal(status().kö[0].utskick.nästa_försök, null);
+  context.board.emit = () => { throw new Error('oväntat fel'); };
+  plugin.onEvent(question({ id: 101 }), context);
+  assert.equal(status().kö.find(item => item.id === 101).utskick.nästa_försök, null);
+  plugin.tick(context, Date.now() + 600000);
+  assert.equal(sent.length, 1);
+});
+
+test('completion or cancellation stops scheduled retries', t => {
+  t.mock.method(console, 'error', () => {});
+  failure = 'max 6 händelser per minut och kvarter';
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  plugin.onEvent(fromRequester(101, 'Anna'), context);
+  answer(100);
+  plugin.onMessage({ id: 901, ts: Date.now(), from: 'Anna', channel: 'torget', text: '@fralle återkalla 101' }, context);
+  plugin.tick(context, Date.now() + 600000);
+  assert.equal(sent.length, 2);
+  assert.equal(status().kö.length, 0);
+  assert.equal(status().återkallade[0].id, 101);
+});
+
+test('only the requester can cancel a waiting question; processing questions are protected', () => {
+  plugin.onEvent(fromRequester(100, 'Anna'), context);
+  const cancel = from => plugin.onMessage({ id: 901, ts: Date.now(), from, channel: 'torget', text: '@fralle cancel 100' }, context);
+  cancel('Bo');
+  assert.equal(status().kö.length, 1);
+  assert.match(posted.at(-1).text, /eget angivna/);
+  lifecycle(100, 'svar.utkast');
+  cancel('Anna');
+  assert.equal(status().kö.length, 1);
+  assert.match(posted.at(-1).text, /börjat behandlas/);
+  plugin.onEvent(fromRequester(101, 'Anna'), context);
+  plugin.onMessage({ id: 902, ts: Date.now(), from: 'ANNA', channel: 'torget', text: '@fralle återkalla 101' }, context);
+  assert.equal(status().återkallade[0].id, 101);
+  assert.equal(posted.at(-1).reply_to, 902);
+});
+
+test('claim enforces current fair head, single reservation and idempotent renewal', async () => {
+  voice();
+  const now = Date.now();
+  plugin.onEvent(fromRequester(100, 'A', 'Fråga', now), context);
+  plugin.onEvent(fromRequester(101, 'A', 'Fråga', now + 1), context);
+  plugin.onEvent(fromRequester(102, 'B', 'Fråga', now + 2), context);
+  assert.equal((await api('/claim', { fråga_id: 102, team: 'mikael' })).code, 409);
+  const results = await Promise.all([
+    api('/claim', { fråga_id: 100, team: 'mikael' }),
+    api('/claim', { fråga_id: 102, team: 'mikael' }),
+  ]);
+  assert.deepEqual(results.map(result => result.code), [200, 409]);
+  assert.equal((await api('/next')).body.upptagen, true);
+  assert.equal((await api('/claim', { fråga_id: 100, team: 'mikael' })).code, 200);
+  const savedTurn = JSON.parse(readFileSync(join(temp, 'queue.json'), 'utf8')).turn;
+  answer(100);
+  assert.equal(JSON.parse(readFileSync(join(temp, 'queue.json'), 'utf8')).turn, savedTurn);
+  assert.equal((await api('/next')).body.fråga.id, 102);
+});
+
+test('reservation survives restart and expiration restores fair selection', async t => {
+  t.mock.method(console, 'error', () => {});
+  voice();
+  plugin.onEvent(fromRequester(100, 'A'), context);
+  plugin.onEvent(fromRequester(101, 'B'), context);
+  const result = await api('/claim', { fråga_id: 100, team: 'mikael' });
+  plugin.init(context);
+  assert.equal((await api('/next')).body.upptagen, true);
+  plugin.tick(context, result.body.reservation.till);
+  assert.equal((await api('/next')).body.fråga.id, 101);
+  assert.equal(status().kö.find(item => item.id === 100).reservation, undefined);
+});
+
+test('claim validates JSON, size, team and unavailable storage explicitly', async () => {
+  plugin.onEvent(question(), context);
+  assert.equal((await api('/claim', 'broken', 'POST')).code, 400);
+  assert.equal((await api('/claim', 'x'.repeat(4097), 'POST')).code, 413);
+  assert.equal((await api('/claim', { fråga_id: 0, team: 'mikael' })).code, 400);
+  assert.equal((await api('/claim', { fråga_id: 100, team: 'mikael' })).code, 503);
+  voice();
+  assert.equal((await api('/claim', { fråga_id: 100, team: 'annan' })).code, 403);
+  writeFileSync(join(temp, 'queue.json'), 'broken');
+  assert.throws(() => plugin.init(context));
+  assert.equal((await api('/claim', { fråga_id: 100, team: 'mikael' })).code, 503);
+});
+
+test('UTF-8 claim fields survive a split inside a multibyte character', async () => {
+  voice();
+  plugin.onEvent(question(), context);
+  const buffer = Buffer.from(JSON.stringify({ fråga_id: 100, team: 'mikael' }));
+  const split = buffer.indexOf(Buffer.from('å')) + 1;
+  assert.equal((await api('/claim', [buffer.subarray(0, split), buffer.subarray(split)])).code, 200);
+});
+
+test('missing or malformed bus acknowledgements fail explicitly without retries', t => {
+  t.mock.method(console, 'error', () => {});
+  for (const [index, acknowledgement] of [undefined, null, {}, { handelse: {} }].entries()) {
+    t.mock.method(context.board, 'emit', () => acknowledgement);
+    plugin.onEvent(question({ id: 100 + index }), context);
+    const item = status().kö.find(entry => entry.id === 100 + index);
+    assert.equal(item.prioritetshändelse, undefined);
+    assert.equal(item.utskick.nästa_försök, null);
+    assert.match(item.utskick.fel, /ingen giltig händelse/);
+  }
+});
+
+test('a new reservation after expiration consumes a fresh fair turn', async t => {
+  t.mock.method(console, 'error', () => {});
+  voice();
+  plugin.onEvent(fromRequester(100, 'A'), context);
+  plugin.onEvent(fromRequester(101, 'B'), context);
+  plugin.onEvent(fromRequester(102, 'B'), context);
+  let reservation = await api('/claim', { fråga_id: 100, team: 'mikael' });
+  plugin.tick(context, reservation.body.reservation.till);
+  reservation = await api('/claim', { fråga_id: 101, team: 'mikael' });
+  answer(101);
+  reservation = await api('/claim', { fråga_id: 100, team: 'mikael' });
+  plugin.tick(context, reservation.body.reservation.till);
+  assert.equal((await api('/next')).body.fråga.id, 102);
 });
 
 test('corrupt storage fails explicitly rather than returning an empty healthy queue', () => {
@@ -357,7 +572,7 @@ test('status is read-only and unknown routes are not handled', () => {
   assert.equal(plugin.handle({ method: 'GET' }, {}, { ...context, path: '/unknown' }), false);
 });
 
-test('real server reacts on bus, serves frontend and persists queue over restart', { timeout: 20000 }, async t => {
+test('real HTTP queue reserves fair turns, tracks lifecycle and persists cancellation over restart', { timeout: 20000 }, async t => {
   const root = resolve(__dirname, '../../..');
   const directory = mkdtempSync(join(tmpdir(), 'fralle-integration-'));
   const plugins = join(directory, 'plugins');
@@ -394,7 +609,30 @@ test('real server reacts on bus, serves frontend and persists queue over restart
     assert.equal(response.status, 201, await response.clone().text());
     return response.json();
   }
+  async function read(endpoint) {
+    const response = await fetch(base + endpoint);
+    assert.equal(response.status, 200, await response.clone().text());
+    return response.json();
+  }
+  async function reserve(id, code = 200, team = 'mikael') {
+    const response = await fetch(base + '/t/fralle/claim', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ fråga_id: id, team }),
+    });
+    assert.equal(response.status, code, await response.clone().text());
+    return response.json();
+  }
+  async function until(endpoint, condition) {
+    let value;
+    for (let tries = 0; tries < 30; tries++) {
+      value = await read(endpoint);
+      if (condition(value)) return value;
+      await new Promise(resolveWait => setTimeout(resolveWait, 20));
+    }
+    assert.fail('Condition not reached: ' + JSON.stringify(value));
+  }
   const claim = await post('/api/messages', { from: 'minneslaget', channel: 'bygge', text: 'Team minneslaget tar förmågan Minnet.' });
+  await post('/api/messages', { from: 'mikael', channel: 'bygge', text: 'Vi tar Rösten.' });
   const input = await post('/api/events', { from: 'orat', typ: 'fråga.ny', nyttolast: { fråga: 'Vem bygger minnet?', frågare: 'Anna', inlägg: claim.id, kanal: 'bygge' } });
   let result;
   for (let tries = 0; tries < 30; tries++) {
@@ -414,20 +652,47 @@ test('real server reacts on bus, serves frontend and persists queue over restart
   for (const name of ['', 'app.js', 'style.css']) {
     assert.equal((await fetch(base + '/staden/kvarter/fralle/' + name)).status, 200);
   }
+  const another = await post('/api/events', { from: 'orat', typ: 'fråga.ny', nyttolast: { fråga: 'En fråga till', frågare: 'Anna' } });
+  const otherRequester = await post('/api/events', { from: 'orat', typ: 'fråga.ny', nyttolast: { fråga: 'Min fråga', frågare: 'Bo' } });
+  const withdrawn = await post('/api/events', { from: 'orat', typ: 'fråga.ny', nyttolast: { fråga: 'Kan återkallas', frågare: 'Clara' } });
+  await until('/t/fralle/status', value => value.kö.length === 4);
+  const rejected = await post('/api/messages', { from: 'Malin', channel: 'torget', text: '@fralle cancel ' + withdrawn.id });
+  await until('/api/messages?channel=torget', messages => messages.some(message => message.reply_to === rejected.id && message.text.includes('bara återkalla')));
+  assert.equal((await read('/t/fralle/status')).kö.length, 4);
+  const cancelled = await post('/api/messages', { from: 'CLARA', channel: 'torget', text: '@fralle återkalla ' + withdrawn.id });
+  await until('/api/messages?channel=torget', messages => messages.some(message => message.reply_to === cancelled.id && message.text.includes('är återkallad')));
+  result = await until('/t/fralle/status', value => value.återkallade.length === 1);
+  assert.deepEqual(result.kö.map(item => item.id), [input.id, otherRequester.id, another.id]);
+  assert.equal((await read('/t/fralle/next')).fråga.id, input.id);
+  await reserve(another.id, 409);
+  await reserve(input.id, 403, 'annan');
+  await reserve(input.id);
+  await reserve(otherRequester.id, 409);
+  assert.deepEqual(await read('/t/fralle/next'), { fråga: null, upptagen: true });
+  const draft = await post('/api/events', { from: 'mikael', typ: 'svar.utkast', nyttolast: { fråga_id: input.id }, orsak: bus[0].id });
+  result = await until('/t/fralle/status', value => value.kö.find(item => item.id === input.id)?.steg === 'väntar på granskning');
   const exited = once(processHandle, 'exit');
   processHandle.kill();
   await exited;
   base = await start();
   const restored = await (await fetch(base + '/t/fralle/status')).json();
-  assert.deepEqual(restored.kö, result.kö);
-  await post('/api/events', { from: 'rosten', typ: 'svar.klart', nyttolast: { fråga_id: input.id }, orsak: bus[0].id });
-  let completed;
-  for (let tries = 0; tries < 30; tries++) {
-    completed = await (await fetch(base + '/t/fralle/status')).json();
-    if (!completed.kö.length) break;
-    await new Promise(resolveWait => setTimeout(resolveWait, 20));
-  }
+  assert.deepEqual(restored.kö.map(({ väntetid_sek, ...item }) => item), result.kö.map(({ väntetid_sek, ...item }) => item));
+  assert.deepEqual(restored.återkallade, result.återkallade);
+  assert.deepEqual(await read('/t/fralle/next'), { fråga: null, upptagen: true });
+  const review = await post('/api/events', { from: 'granskaren', typ: 'svar.granskat', nyttolast: { fråga_id: input.id }, orsak: draft.id });
+  await until('/t/fralle/status', value => value.kö.find(item => item.id === input.id)?.steg === 'granskat');
+  await post('/api/events', { from: 'mikael', typ: 'svar.klart', nyttolast: { fråga_id: input.id }, orsak: review.id });
+  await until('/t/fralle/status', value => value.besvarade.length === 1);
+  assert.equal((await read('/t/fralle/next')).fråga.id, otherRequester.id);
+  await reserve(otherRequester.id);
+  await post('/api/events', { from: 'mikael', typ: 'svar.klart', nyttolast: { fråga_id: otherRequester.id } });
+  await until('/t/fralle/status', value => value.besvarade.length === 2);
+  assert.equal((await read('/t/fralle/next')).fråga.id, another.id);
+  await reserve(another.id);
+  await post('/api/events', { from: 'mikael', typ: 'svar.klart', nyttolast: { fråga_id: another.id } });
+  const completed = await until('/t/fralle/status', value => !value.kö.length);
   assert.equal(completed.kö.length, 0);
-  assert.equal(completed.besvarade[0].id, input.id);
+  assert.deepEqual(new Set(completed.besvarade.map(item => item.id)), new Set([input.id, otherRequester.id, another.id]));
+  assert.deepEqual(await read('/t/fralle/next'), { fråga: null, upptagen: false });
   assert.equal(logs, '');
 });

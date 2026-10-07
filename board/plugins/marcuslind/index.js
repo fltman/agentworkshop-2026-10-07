@@ -28,6 +28,27 @@ function sparaHistorik(ctx, historik) {
   } catch (e) { console.error('[marcuslind] spara historik:', e.message); }
 }
 
+function portrattFil(ctx) {
+  const path = require('path');
+  return path.join(ctx.dataDir, 'portratt.json');
+}
+
+function lasPortratt(ctx) {
+  try {
+    const fs = require('fs');
+    const f = portrattFil(ctx);
+    if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
+  } catch (e) { console.error('[marcuslind] läs porträtt:', e.message); }
+  return null;
+}
+
+function sparaPortratt(ctx, url) {
+  try {
+    const fs = require('fs');
+    fs.writeFileSync(portrattFil(ctx), JSON.stringify({ url, ts: Date.now() }, null, 2));
+  } catch (e) { console.error('[marcuslind] spara porträtt:', e.message); }
+}
+
 function hittaKanal(fraga, standard) {
   const m = /#([a-zåäö0-9-]+)/i.exec(fraga || '');
   return (m ? m[1] : standard || 'torget').toLowerCase();
@@ -49,11 +70,25 @@ module.exports = {
       res.end(JSON.stringify(historik.slice().reverse()));
       return true;
     }
+    if (req.method === 'GET' && path === '/portratt') {
+      const portratt = lasPortratt({ dataDir });
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(portratt || {}));
+      return true;
+    }
     return false; // → 404
   },
 
   onEvent(e, ctx) {
     if (e.kvarter === ctx.team) return;      // reagera inte på oss själva
+
+    // Ateljéns porträtt till oss, hängs upp i rutan på /staden.
+    if (e.typ === 'bild.klar' && e.kvarter === 'ateljen') {
+      const n = e.nyttolast || {};
+      if (n.till === ctx.team && n.url) sparaPortratt(ctx, n.url);
+      return;
+    }
+
     if (e.typ !== 'fråga.ny') return;        // vänta på Örats fråga.ny
 
     const nyttolast = e.nyttolast || {};
@@ -68,8 +103,12 @@ module.exports = {
     historik.push({ id: e.id, ts: e.ts, kanal, sammanfattning, antalInlägg: poster.length });
     sparaHistorik(ctx, historik);
 
+    // Granskaren räknar bara källor med styrka >= 50: en lyckad sammanfattning ska alltså
+    // alltid ligga över det, en tom kanal får låg styrka så den inte räknas som ett bekräftat svar.
+    const styrka = poster.length === 0 ? 20 : Math.min(100, 70 + poster.length);
+
     ctx.board.emit('sammanfattning.klar', {
-      styrka: Math.min(100, poster.length * 5),
+      styrka,
       orsak: e.id,
       nyttolast: { kanal, sammanfattning, antalInlägg: poster.length },
     });

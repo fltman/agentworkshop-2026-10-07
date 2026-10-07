@@ -2,7 +2,8 @@
 //
 // Lotsen utlöses en gång per fråga (fråga.ny från Örat), av det som först inträffar:
 //   - minne.träff med låg säkerhet (styrka < 50) i frågans kedja (Minnet vet inte)
-//   - svar.granskat med låg styrka (< 60) i frågans kedja (Granskaren underkänner)
+//   - svar.granskat med låg styrka (< 60) i frågans kedja (Granskaren underkänner),
+//     utom när Minnet har en säker träff (styrka >= 70) på samma fråga
 //   - fråga.obesvarad från Örat (ingen har reagerat på 3 min)
 //   - inget säkert svar inom VANTA_MS, eller inget postat svar (svar.klart) inom VANTA_MS + VANTA_EXTRA_MS
 // Då skickas lots.förslag med orsak = frågan, och Lotsen svarar synligt i frågans tråd.
@@ -21,6 +22,10 @@ const STOPPORD = new Set([
   'kollegan', '@kollegan', 'någon', 'något', 'bygger', 'what', 'who', 'the', 'and', 'does', 'with', 'this',
 ]);
 const INTE_KANDIDAT = new Set(['release-agenten', 'kollegan']);
+const UPPDRAG = [
+  [/sammanfatta|summar|vad (?:har )?hänt|vad hände|what happened/, 'mötet'],
+  [/översätt|translat|på engelska|in english|på svenska|in swedish/, 'översättaren'],
+];
 
 const st = { hanterade: new Set(), timrar: new Map() };
 
@@ -54,6 +59,11 @@ function hittaKandidat(board, team, fraga, fragare) {
       return { agent: a.team, inlägg: a.inlägg, kanal: 'bygge', styrka: 90, varför: `äger förmågan ${namn}` };
     }
   }
+  // Frågor som en förmåga äger utan att nämna den: sammanfattningar → Mötet, översättningar → Översättaren.
+  for (const [re, namn] of UPPDRAG) {
+    const a = karta.get(namn);
+    if (a && ok(a.team) && re.test(q)) return { agent: a.team, inlägg: a.inlägg, kanal: 'bygge', styrka: 80, varför: `äger förmågan ${namn}` };
+  }
   if (!ord.length) return null;
 
   let bast = null;
@@ -66,7 +76,7 @@ function hittaKandidat(board, team, fraga, fragare) {
   for (const m of board.query({ limit: 300 })) {
     if (!ok(m.from) || m.channel === 'kollegan-events') continue;
     const text = String(m.text || '').toLowerCase();
-    if (text.includes('@kollegan') || text.startsWith('lotsen:')) continue; // frågor och våra egna svar vet inget
+    if (text.includes('@kollegan') || text.startsWith('lotsen:') || text.startsWith('kollegan:')) continue; // frågor och Kollegans egna svar vet inget
     const p = ord.filter((o) => text.includes(o)).length;
     if (p > 0 && (!bast || p > bast.p)) bast = { p, agent: m.from, inlägg: m.id, kanal: m.channel, varför: `har pratat om det i #${m.channel}` };
   }
@@ -87,7 +97,8 @@ function rotFraga(handelser, e) {
 function status(handelser, fraga) {
   const kedja = handelser.filter((e) => e.id > fraga.id && rotFraga(handelser, e)?.id === fraga.id);
   if (kedja.some((e) => e.typ === 'svar.klart')) return 'klar';
-  if (kedja.some((e) => e.styrka !== null && e.styrka >= 60 && ['minne.träff', 'svar.utkast', 'svar.granskat'].includes(e.typ))) return 'på väg';
+  if (kedja.some((e) => e.typ === 'sammanfattning.klar'
+    || (e.styrka !== null && e.styrka >= 60 && ['minne.träff', 'svar.utkast', 'svar.granskat'].includes(e.typ)))) return 'på väg';
   return 'tyst';
 }
 
@@ -111,7 +122,19 @@ function lotsa(ctx, fraga, utlosare) {
   let fragare = n.frågare;
   if (!fragare && n.inlägg) fragare = (ctx.board.query({ limit: 500 }).find((m) => m.id === n.inlägg) || {}).from;
   const k = franKon(ctx, fraga, fragare) || hittaKandidat(ctx.board, ctx.team, n.fråga, fragare);
-  if (!k) return;
+  if (!k) {
+    // Ingen vet: säg det hellre än att tiga, så att frågaren kan vända sig till rummet.
+    const r0 = ctx.board.emit('lots.förslag', {
+      styrka: 10,
+      nyttolast: { fråga: n.fråga, förslag: null, varför: 'ingen på Torget har pratat om det', kanal: n.kanal, inlägg: n.inlägg, utlöst_av: utlosare },
+      orsak: fraga.id,
+    });
+    if (r0.error) console.error('[babtist] emit', r0.error);
+    if (n.kanal && n.kanal !== 'kollegan-events') {
+      ctx.board.post('Lotsen: Ingen på Torget har skrivit om det här än, så jag vet inte vem som kan svara. Fråga gärna rummet direkt i #torget.', n.kanal, n.inlägg);
+    }
+    return;
+  }
   const r = ctx.board.emit('lots.förslag', {
     styrka: k.styrka,
     nyttolast: { fråga: n.fråga, förslag: k.agent, varför: k.varför, källa: k.inlägg, kanal: n.kanal, inlägg: n.inlägg, utlöst_av: utlosare },
@@ -120,7 +143,11 @@ function lotsa(ctx, fraga, utlosare) {
   if (r.error) { console.error('[babtist] emit', r.error); return; }
   if (n.kanal && n.kanal !== 'kollegan-events') {
     const inledning = utlosare === 'svaret fastnade' ? 'Kollegans svar fastnade på vägen.' : 'Kollegan är inte säker här.';
-    ctx.board.post(`Lotsen: ${inledning} @${k.agent} kan nog svara (${k.varför}, se inlägg ${k.inlägg}).`, n.kanal, n.inlägg);
+    // Pulsens färdiga mening förklarar varför det dröjer, när Lotsen väcktes av tid och inte av ett svagt svar.
+    const puls = ['tystnad', 'svaret fastnade'].includes(utlosare)
+      ? ctx.board.events(100).filter((e) => e.typ.startsWith('puls.') && e.nyttolast && e.nyttolast.rad).pop() : null;
+    const pulsrad = puls ? ` Pulsen: ${String(puls.nyttolast.rad).replace(/@/g, '').replace(/[.\s]+$/, '')}.` : '';
+    ctx.board.post(`Lotsen: ${inledning} @${k.agent} kan nog svara (${k.varför}, se inlägg ${k.inlägg}).${pulsrad}`, n.kanal, n.inlägg);
   }
 }
 
@@ -159,7 +186,14 @@ module.exports = {
       || (e.typ === 'minne.träff' && e.styrka !== null && e.styrka < 50)
       || (e.typ === 'svar.granskat' && e.styrka !== null && e.styrka < 60);
     if (!svag) return;
-    const fraga = rotFraga(ctx.board.events(300), e);
-    if (fraga) lotsa(ctx, fraga, e.typ);
+    const handelser = ctx.board.events(300);
+    const fraga = rotFraga(handelser, e);
+    if (!fraga) return;
+    // Frågor som Mötet eller Översättaren äger: Minnet vet inget, men förmågan svarar. Låt timern avgöra.
+    if (e.typ === 'minne.träff' && UPPDRAG.some(([re]) => re.test(String(fraga.nyttolast?.fråga || '').toLowerCase()))) return;
+    // Underkänt svar men Minnet är säkert eller Mötet har sammanfattat: låt timern avgöra, i stället för att lotsa direkt.
+    if (e.typ === 'svar.granskat' && handelser.some((x) => rotFraga(handelser, x)?.id === fraga.id
+      && (x.typ === 'sammanfattning.klar' || (x.typ === 'minne.träff' && x.styrka !== null && x.styrka >= 70)))) return;
+    lotsa(ctx, fraga, e.typ);
   },
 };
