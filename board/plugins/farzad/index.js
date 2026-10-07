@@ -20,6 +20,7 @@
 //   POST /t/farzad/vack   → en människa väcker nyfikenheten (kortare spärr)
 //   POST /t/farzad/paus   → pausar frågorna, sagan och uppropet (under demon)
 //   POST /t/farzad/fortsatt → slår på dem igen
+//   GET  /t/farzad/report-data?from=MS&to=MS → Rapportörens format (fralle, schema 1), bara mått
 
 const fs = require('fs');
 const path = require('path');
@@ -299,6 +300,49 @@ function fraga(board, { knapp = false } = {}) {
   return { ok: true, fråga: fr };
 }
 
+// Rapportörens format (fralle, schema 1). Bara mått, inga records. Historiken är begränsad (50 frågor,
+// 20 sagor, 10 upprop), så täckningen är ofullständig om en full lista inte räcker tillbaka till from.
+function rapport(url) {
+  const from = Number(url.searchParams.get('from'));
+  const to = Number(url.searchParams.get('to'));
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || from >= to || to - from > 24 * 3600 * 1000) return null;
+  const inom = ts => ts >= from && ts < to;
+  const listor = [[st.historik, 50], [st.sagor, 20], [st.upprop, 10]];
+  let tackFran = from;
+  for (const [l, max] of listor) if (l.length >= max && l[0].ts > tackFran) tackFran = l[0].ts;
+  const komplett = tackFran === from;
+  const fr = st.historik.filter(h => inom(h.ts));
+  const svar = fr.filter(h => h.svar && h.svar.riktigt);
+  const tider = svar.map(h => h.svar.ts - h.ts).filter(t => t >= 0);
+  const sagor = [...st.sagor, ...(st.saga ? [st.saga] : [])].filter(s => inom(s.ts));
+  const upprop = [...st.upprop, ...(st.ping ? [st.ping] : [])].filter(p => inom(p.ts));
+  const m = (key, label, value, unit, scope, extra = {}) => ({ key, label, value, unit, scope, ...extra });
+  return {
+    schema_version: 1,
+    team: 'farzad',
+    capability: 'Nyfikenheten',
+    generated_at: Date.now(),
+    period: { from, to },
+    coverage: {
+      from: tackFran, to, complete: komplett,
+      note: komplett
+        ? 'Hela perioden finns i den sparade historiken.'
+        : 'Historiken sparar bara de senaste 50 frågorna, 20 sagorna och 10 uppropen; äldre delar av perioden saknas.',
+    },
+    metrics: [
+      m('questions_asked', 'Egna frågor till Kollegan', fr.length, 'count', 'period'),
+      m('questions_answered', 'Egna frågor med svar från Kollegan', svar.length, 'count', 'period'),
+      m('answer_latency_avg', 'Snittid till Kollegans svar', tider.length ? Math.round(tider.reduce((a, b) => a + b, 0) / tider.length) : null,
+        'ms', 'period', { sample_size: tider.length }),
+      m('sagas_started', 'Påbörjade sagor', sagor.length, 'count', 'period'),
+      m('saga_lines_from_others', 'Sagarader från andra', sagor.reduce((n, s) => n + s.rader.filter(r => r.från !== 'farzad').length, 0), 'count', 'period'),
+      m('pings_sent', 'Upprop (Är ni vakna?)', upprop.length, 'count', 'period'),
+      m('ping_answers', 'Svar på upprop', upprop.reduce((n, p) => n + p.svar.length, 0), 'count', 'period'),
+      m('paused', 'Pausad just nu (1 = ja)', st.paus ? 1 : 0, 'boolean', 'snapshot'),
+    ],
+  };
+}
+
 function json(res, kod, data) {
   res.writeHead(kod, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(data));
@@ -377,7 +421,12 @@ module.exports = {
     fraga(board);
   },
 
-  async handle(req, res, { path: p, board }) {
+  async handle(req, res, { path: p, board, url }) {
+    if (req.method === 'GET' && p === '/report-data') {
+      const r = rapport(url);
+      json(res, r ? 200 : 400, r || { error: 'from och to krävs: epoch ms, from < to, högst 24 timmar' });
+      return true;
+    }
     if (req.method === 'GET' && p === '/state') {
       const nu = Date.now();
       const alla = board.events(2000);

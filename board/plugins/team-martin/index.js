@@ -9,7 +9,7 @@
 // Skickar:     puls.tryck  — reaktion på en fråga: hur bråttom är det just nu (orsak = frågans id)
 //              puls.tempo  — rummets tempo när det faktiskt ändrats
 //
-// HTTP:        GET /t/team-martin/puls   → allt rutan på /staden behöver
+//              GET /t/team-martin/report-data?from=MS&to=MS  → Rapportörens V1-kontrakt (fralle, #bygge 675/677/1231)
 
 const FONSTER_MS = 5 * 60 * 1000;   // glidande fönster för tempo
 const OBESVARAD_MS = 90 * 1000;     // en fråga räknas som väntande efter så här lång tid
@@ -22,6 +22,7 @@ const MPM_FULL = 8;                 // åtta inlägg i minuten räknas som full 
 const BUSS = 'kollegan-events';     // bussens egen trafik är förmågornas, inte rummets
 const GLOM_FRAGA_MS = 20 * 60 * 1000; // en fråga som väntat så länge är inte längre aktuell
 const TRYCK_MAX_FRAGOR = 5;         // trycket mättas, en kö på trettio är inte trettio gånger värre
+const RAPPORT_MAX_SPAN_MS = 24 * 60 * 60 * 1000; // Rapportörens tak per begäran
 
 const st = {
   msgs: [],            // {ts, channel} i fönstret
@@ -180,6 +181,77 @@ function tempoPuls(board) {
   }
 }
 
+// Rapportörens V1-kontrakt: bara det vi faktiskt observerat i perioden, med ärlig täckning.
+// Vi sparar inte råa inlägg utanför det glidande 5-minutersfönstret, bara periodiska
+// pulsmätningar (st.historik, var 20:e sekund, högst HISTORIK_MAX stycken) och de senaste
+// puls.tryck-reaktionerna (st.reaktioner, högst 12). Täckningen begränsas av det.
+function rapportData(from, to) {
+  const genererad = nu();
+  const punkter = st.historik.filter((h) => h.ts >= from && h.ts < to);
+  const reaktionerIPerioden = st.reaktioner.filter((r) => r.ts >= from && r.ts < to);
+  const tidigasteHistorik = st.historik.length ? st.historik[0].ts : null;
+  const tidigasteReaktion = st.reaktioner.length ? st.reaktioner[0].ts : null;
+
+  // Fullständig täckning kräver att vi haft periodiska mätningar sedan före periodens start
+  // och att perioden inte sträcker sig in i framtiden.
+  const historikTäcker = tidigasteHistorik !== null && from >= tidigasteHistorik;
+  const complete = historikTäcker && to <= genererad + 5000;
+
+  const styrkor = punkter.map((p) => p.styrka);
+  const avgStyrka = styrkor.length ? +(styrkor.reduce((s, x) => s + x, 0) / styrkor.length).toFixed(1) : null;
+  const maxStyrka = styrkor.length ? Math.max(...styrkor) : null;
+  const koar = reaktionerIPerioden.map((r) => r.köar).filter((n) => typeof n === 'number');
+  const maxKoar = koar.length ? Math.max(...koar) : null;
+
+  let note;
+  if (complete) {
+    note = 'Periodiska pulsmätningar (var 20:e sekund) täcker hela perioden.';
+  } else if (tidigasteHistorik === null) {
+    note = 'Ingen historik sparad än (nyligen startad eller omstartad process).';
+  } else if (!historikTäcker) {
+    note = `Historik sparas glidande, högst ${HISTORIK_MAX} mätpunkter; perioden börjar före vår äldsta sparade mätning (${new Date(tidigasteHistorik).toISOString()}).`;
+  } else {
+    note = 'Perioden sträcker sig in i framtiden eller efter senaste mätning.';
+  }
+
+  return {
+    schema_version: 1,
+    team: 'team-martin',
+    capability: 'Pulsen',
+    generated_at: genererad,
+    period: { from, to },
+    coverage: { from: tidigasteHistorik, to: genererad, complete, note },
+    metrics: [
+      {
+        key: 'pulse_samples', label: 'Antal pulsmätningar i perioden', value: punkter.length || null,
+        unit: 'count', scope: complete ? 'period' : 'retained',
+      },
+      {
+        key: 'avg_pulse_strength', label: 'Snittstyrka (0-100) i perioden', value: avgStyrka,
+        unit: 'index', scope: complete ? 'period' : 'retained',
+      },
+      {
+        key: 'max_pulse_strength', label: 'Högsta styrka (0-100) i perioden', value: maxStyrka,
+        unit: 'index', scope: complete ? 'period' : 'retained',
+      },
+      {
+        key: 'tempo_events_emitted', label: 'Antal puls.tempo skickade i perioden',
+        value: punkter.length ? punkter.filter((p) => p.skickad).length : null,
+        unit: 'count', scope: complete ? 'period' : 'retained',
+      },
+      {
+        key: 'pressure_reactions_sent', label: 'Antal puls.tryck skickade i perioden (senaste 12 sparas)',
+        value: tidigasteReaktion !== null && from >= tidigasteReaktion ? reaktionerIPerioden.length : null,
+        unit: 'count', scope: 'retained',
+      },
+      {
+        key: 'max_queue_waiting', label: 'Flest obesvarade frågor vid en reaktion i perioden',
+        value: maxKoar, unit: 'count', scope: 'retained',
+      },
+    ],
+  };
+}
+
 module.exports = {
   init(ctx) {
     const { board } = ctx;
@@ -297,8 +369,28 @@ module.exports = {
     }
   },
 
-  async handle(req, res, { path }) {
+  async handle(req, res, { path, url }) {
     if (req.method !== 'GET') return false;
+
+    // Rapportörens bindande V1-kontrakt (fralle, #bygge 675/677/1231): GET /report-data?from=MS&to=MS
+    if (path === '/report-data') {
+      const sp = url ? url.searchParams : new URL(req.url, 'http://x').searchParams;
+      const from = Number(sp.get('from'));
+      const to = Number(sp.get('to'));
+      const fel = (status, code, meddelande) => {
+        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ error: code, message: meddelande }));
+        return true;
+      };
+      if (!Number.isFinite(from) || !Number.isFinite(to)) return fel(400, 'bad_request', 'from och to krävs som epoch-ms.');
+      if (from >= to) return fel(400, 'bad_request', 'from måste vara mindre än to.');
+      if (to - from > RAPPORT_MAX_SPAN_MS) return fel(400, 'bad_request', 'perioden får vara högst 24 timmar.');
+
+      const svar = rapportData(from, to);
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(svar));
+      return true;
+    }
 
     // En rad i klartext, för Rösten och för den som bara vill läsa: GET /t/team-martin/rad
     if (path === '/rad') {
