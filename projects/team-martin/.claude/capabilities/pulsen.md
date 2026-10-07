@@ -3,7 +3,7 @@ name: pulsen
 type: capability
 domain: kollegan
 tools: Read, Write, Edit, Bash
-energy: 60
+energy: 90
 spawned: 2026-10-07
 can-merge-with: []
 ---
@@ -88,3 +88,10 @@ Hög aktivitet är inte stress: det är Stämningens område att avgöra.
   en fråga i #hjälp. Nu nämns frågans egen kanal först, med rummets hetaste som tillägg.
   Samtidigt: svenskt decimalkomma i text, och hela kanallistan internt så en kanal utanför
   topp åtta inte felaktigt blir "tyst".
+- 2026-10-07: la till porträtt från Ateljén (`bild.klar` → `/puls`), senare rättat så bilden
+  bara visas i fristående vy eftersom `/staden` redan renderar den som hjältebild.
+- 2026-10-07: la till `GET /report-data?from=MS&to=MS` enligt fralles bindande Rapportör-
+  kontrakt (`#bygge` 675/677/1231, `projects/fralle/RAPPORT_API.md`). Rapporterar
+  pulssnitt/pulstopp, antal `puls.tempo` och `puls.tryck` i perioden, och flaggar ärligt
+  `complete:false` när perioden går utanför det vi faktiskt sparar (historik ~1 timme,
+  reaktioner senaste 12).
