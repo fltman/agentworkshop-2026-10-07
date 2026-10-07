@@ -73,6 +73,74 @@ module.exports = {
 
   async handle(req, res, ctx) {
     const p = ctx.path;
+    if (req.method === 'GET' && p === '/report-data') {
+      const now = Date.now();
+      const fromParam = ctx.url ? ctx.url.searchParams.get('from') : null;
+      const toParam = ctx.url ? ctx.url.searchParams.get('to') : null;
+
+      const from = fromParam && !isNaN(Number(fromParam)) ? Number(fromParam) : (now - 3600000);
+      const to = toParam && !isNaN(Number(toParam)) ? Number(toParam) : (now + 1000);
+
+      const allRecords = ctx.historik || [];
+      const periodRecords = allRecords.filter((r) => r.ts >= from && r.ts < to);
+
+      const total = periodRecords.length;
+      const godkända = periodRecords.filter((r) => r.godkänt).length;
+      const andel = total ? Math.round((godkända / total) * 100) : null;
+      const snittStyrka = total ? Math.round(periodRecords.reduce((acc, r) => acc + (r.styrka ?? 50), 0) / total) : null;
+
+      const allLatenser = ctx.latenser || [];
+      const periodLatenser = allLatenser.filter((l) => {
+        const ts = typeof l === 'object' && l ? l.ts : null;
+        return ts ? (ts >= from && ts < to) : true;
+      });
+      const snittLatensMs = periodLatenser.length
+        ? Math.round(periodLatenser.reduce((acc, l) => acc + (typeof l === 'object' ? l.ms : l), 0) / periodLatenser.length)
+        : null;
+
+      const earliest = allRecords.length > 0 ? Math.min(...allRecords.map((r) => r.ts)) : now;
+      const latest = allRecords.length > 0 ? Math.max(...allRecords.map((r) => r.ts)) : now;
+
+      const report = {
+        schema_version: 1,
+        team: ctx.team,
+        capability: 'Granskaren',
+        generated_at: now,
+        period: { from, to },
+        coverage: {
+          from: earliest,
+          to: latest,
+          complete: allRecords.length < MAX_HISTORIK,
+          note: 'Granskaren sparar de senaste 50 granskningarna i minne och på disk samt observerade latenser.',
+        },
+        metrics: [
+          { key: 'granskade_totalt', label: 'Granskade utkast', value: total, unit: 'st', scope: 'period' },
+          { key: 'godkanda_andel', label: 'Godkänd andel', value: andel, unit: '%', scope: 'period' },
+          { key: 'snitt_styrka', label: 'Genomsnittlig granskningsstyrka', value: snittStyrka, unit: '0-100', scope: 'period' },
+          { key: 'snitt_latens_ms', label: 'Genomsnittlig kedjelatens', value: snittLatensMs, unit: 'ms', scope: 'period' },
+        ],
+        records: periodRecords.map((r) => ({
+          question_id: r.fraga_id || null,
+          received_at: r.ts,
+          answered_at: null,
+          cancelled_at: null,
+          audience: 'unknown',
+          useful: r.godkänt ?? null,
+          saved_minutes: null,
+          review: {
+            strength: r.styrka ?? null,
+            approved: r.godkänt ?? null,
+            reason: r.skäl || null,
+            sources: r.källor || [],
+          },
+        })),
+      };
+
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(report));
+      return true;
+    }
+
     if (req.method === 'GET' && (p === '/granskningar' || p === '/metrics' || p === '/status')) {
       const g = ctx.historik || [];
       const total = g.length;
@@ -81,7 +149,7 @@ module.exports = {
       const godkändAndel = total ? Math.round((godkända / total) * 100) : 0;
       const snittStyrka = total ? Math.round(g.reduce((acc, x) => acc + x.styrka, 0) / total) : 0;
 
-      const latenser = ctx.latenser || [];
+      const latenser = (ctx.latenser || []).map((x) => (typeof x === 'object' && x !== null ? x.ms : x));
       const snittLatensMs = latenser.length ? Math.round(latenser.reduce((a, b) => a + b, 0) / latenser.length) : null;
 
       const källorFrekvens = {};
@@ -123,7 +191,7 @@ module.exports = {
       if (rotFråga && e.ts && rotFråga.ts) {
         const latens = Math.max(100, e.ts - rotFråga.ts);
         if (!ctx.latenser) ctx.latenser = [];
-        ctx.latenser.push(latens);
+        ctx.latenser.push({ ms: latens, ts: e.ts || Date.now() });
         if (ctx.latenser.length > 50) ctx.latenser.shift();
       }
 
@@ -135,7 +203,7 @@ module.exports = {
           const godkända = g.filter((x) => x.godkänt).length;
           const godkändAndel = Math.round((godkända / g.length) * 100);
           const snittStyrka = Math.round(g.reduce((acc, x) => acc + x.styrka, 0) / g.length);
-          const latenser = ctx.latenser || [];
+          const latenser = (ctx.latenser || []).map((x) => (typeof x === 'object' && x !== null ? x.ms : x));
           const snittLatensMs = latenser.length ? Math.round(latenser.reduce((a, b) => a + b, 0) / latenser.length) : 0;
           const rad = `Kvalitetsstatus: ${godkändAndel}% godkända svar (snittstyrka ${snittStyrka}), snittlatens ${(snittLatensMs / 1000).toFixed(1)}s`;
 
@@ -167,6 +235,10 @@ module.exports = {
     const kunskapsHändelser = hittaRelevantaKunskaper(e, senaste, index, ctx.team);
     const källor = [...new Set(kunskapsHändelser.map((h) => h.kvarter))];
 
+    const förfäderTillE = förfäder(e, index);
+    const rotFråga = förfäderTillE.find((h) => h.typ === 'fråga.ny') || (e.nyttolast && e.nyttolast.fråga_id ? index.get(e.nyttolast.fråga_id) : null);
+    const fragaId = rotFråga ? rotFråga.id : ((e.nyttolast && e.nyttolast.fråga_id) || e.orsak || null);
+
     const grundStyrka = e.styrka ?? 50;
     let styrka;
     let skäl;
@@ -189,7 +261,7 @@ module.exports = {
 
     ctx.granskade.add(e.id);
     ctx.historik.push({
-      handelse: e.id, ts: Date.now(), från: e.kvarter, godkänt, styrka, skäl, källor,
+      handelse: e.id, fraga_id: fragaId, ts: Date.now(), från: e.kvarter, godkänt, styrka, skäl, källor,
       svar: typeof svar === 'string' ? svar.slice(0, 200) : null,
     });
     sparaHistorik(ctx.dataDir, ctx.historik);
@@ -197,6 +269,8 @@ module.exports = {
 
   onMessage(m, { board, team }) {
     if (m.from === team) return;
+    if (m.reply_to) return;                          // skippa svarstrådar för att inte skräpa ner
+    if (m.channel === 'bygge') return;               // skippa i #bygge
     if (!new RegExp(`@${team}\\b`, 'i').test(m.text)) return;
     board.post('Jag är Granskaren: jag kollar källa och säkerhet på svar i Kollegans kedja, se /t/heimlen/granskningar eller rutan på /staden.', m.channel, m.id);
   },
