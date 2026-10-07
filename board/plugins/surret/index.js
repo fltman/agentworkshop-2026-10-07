@@ -16,6 +16,11 @@ const OBESVARAD_MS = 3 * 60 * 1000;
 const SVAR_TYPER = /^svar\.(klart|granskat|översatt)$/;
 const NAMNET = /@kollegan\b/i;
 const DUBBLETT_MS = 5 * 60 * 1000;
+const RESERV_MS = 60 * 1000;            // så länge Rösten får på sig innan reserven svarar
+const RESERV_MAX_ALDER_MS = 10 * 60 * 1000; // äldre frågor besvaras aldrig av reserven, inte heller efter omstart
+const RESERV_MIN_STYRKA = 70;
+const ROST_TYPER = /^svar\.(utkast|granskat|klart)$/;
+const KALLA_TYPER = /^(minne\.träff|sammanfattning\.klar|kunskap\.ny)$/;
 const SV_ORD = /^(och|är|vad|vem|hur|varför|vilken|vilka|när|det|att|jag|vi|ni|inte|kan|någon|finns|som|på|med|för|om|har|en|ett|till|bygger|vet)$/;
 const EN_ORD = /^(the|is|what|who|how|why|which|when|and|to|of|can|does|do|are|you|we|in|it|anyone|there|has|have|a|an|building|know)$/;
 
@@ -27,6 +32,7 @@ const st = {
   svarsposter: new Set(), // kvarter som skickat svar.*: deras trådsvar på Torget hörs inte som frågor
   hört: 0,
   dubbletter: 0,
+  reservsvar: 0,
   start: Date.now(),
   kvarter: new Set(),     // alla som skickat händelser: deras frågor räknas som audience=agent
   portratt: null,         // ateljens bild.klar till surret: {url, prompt, ts}
@@ -130,10 +136,43 @@ function bock(board) {
     else if (r && /per minut/.test(r.error || '')) break;
     else f.obesvarad = -1;
   }
+  for (const f of st.fragor) if (behoverReserv(f, nu) && !reserv(f, board)) break;
+}
+
+// Röstens reserv: står Rösten still svarar Örat själv från den starkaste källan, märkt (reserv).
+function behoverReserv(f, nu) {
+  return f.händelse && f.händelseTs && !f.dubblettAv && !f.reserv && !f.röst && !f.trådsvar
+    && f.källa && f.källa.styrka >= RESERV_MIN_STYRKA
+    && nu - f.händelseTs >= RESERV_MS && nu - f.händelseTs < RESERV_MAX_ALDER_MS;
+}
+
+function reservText(t) {
+  let s = String(t || '');
+  const i = s.indexOf('{"'); if (i > 0) s = s.slice(0, i);
+  return s.replace(/\s+/g, ' ').trim().slice(0, 600);
+}
+
+// false = takten slog i taket, försök nästa bock
+function reserv(f, board) {
+  const svar = reservText(f.källa.text);
+  if (!svar) { f.reserv = -1; return true; }
+  const r = board.emit('svar.klart', {
+    styrka: Math.min(f.källa.styrka, 60), orsak: f.källa.id,
+    nyttolast: { fråga: f.fråga, inlägg: f.inlägg, kanal: f.kanal, fråga_id: f.händelse, svar, reserv: true, källa: f.källa.kvarter },
+  });
+  if (r && /per minut/.test(r.error || '')) return false;
+  if (!r || !r.handelse) { console.error('[surret] reserv:', r && r.error); f.reserv = -1; return true; }
+  f.reserv = r.handelse.id;
+  const till = f.frågare ? `@${f.frågare}, ` : '';
+  const not = f.språk === 'en' ? '(stand-in answer, unreviewed, from ' : '(reservsvar, ogranskat, från ';
+  try { board.post(`Kollegan: ${till}${not}${f.källa.kvarter}) ${svar}`, f.kanal, f.inlägg); }
+  catch (err) { console.error('[surret] reserv post:', err && err.message); }
+  return true;
 }
 
 function harArbete() {
-  return st.ko.length > 0 || st.fragor.some(f => f.händelse && !f.obesvarad && !f.besvarad && !f.kedja.length);
+  const nu = Date.now();
+  return st.ko.length > 0 || st.fragor.some(f => (f.händelse && !f.obesvarad && !f.besvarad && !f.kedja.length) || behoverReserv(f, nu));
 }
 
 function las(e, team) {
@@ -153,6 +192,12 @@ function las(e, team) {
       nyFraga(f); st.perHandelse.set(e.id, f); st.hört++;
     } else if (e.typ === 'fråga.obesvarad' && st.perHandelse.has(e.orsak)) {
       const f = st.perHandelse.get(e.orsak); f.obesvarad = e.id; st.perHandelse.set(e.id, f);
+    } else if (e.typ === 'svar.klart' && n.reserv) {
+      const f = st.perInlagg.get(Number(n.inlägg));
+      if (f && !f.kedja.some(k => k.id === e.id)) {
+        f.reserv = e.id; f.besvarad = true; st.perHandelse.set(e.id, f); st.reservsvar++;
+        f.kedja.push({ id: e.id, typ: 'svar.klart', reserv: true, kvarter: team, styrka: e.styrka, djup: e.djup, ts: e.ts, orsak: e.orsak });
+      }
     }
     return;
   }
@@ -162,6 +207,12 @@ function las(e, team) {
   st.perHandelse.set(e.id, f);
   f.kedja.push({ id: e.id, typ: e.typ, kvarter: e.kvarter, styrka: e.styrka, djup: e.djup, ts: e.ts, orsak: e.orsak });
   if (SVAR_TYPER.test(e.typ)) f.besvarad = true;
+  if (ROST_TYPER.test(e.typ)) f.röst = true;
+  const text = n.svar || n.sammanfattning;
+  if (KALLA_TYPER.test(e.typ) && typeof text === 'string' && e.orsak === f.händelse
+    && (!f.källa || (e.styrka || 0) > f.källa.styrka)) {
+    f.källa = { id: e.id, kvarter: e.kvarter, styrka: e.styrka || 0, text };
+  }
 }
 
 function json(res, code, data) {
@@ -236,6 +287,10 @@ module.exports = {
 
   onMessage(m, { board, team }) {
     if (m.channel === BUSS || m.from === team) return;
+    if (m.reply_to && arSvarFranKollegan(m)) {
+      const svarPå = st.perInlagg.get(Number(m.reply_to));
+      if (svarPå) svarPå.trådsvar = true; // Rösten har redan svarat i tråden: ingen reserv
+    }
     if (!NAMNET.test(m.text) || !arTilltal(m) || arSvarFranKollegan(m) || st.perInlagg.has(m.id)) return;
     const rot = rotFraga(m, board);
     const norm = normalisera(m.text);
@@ -271,14 +326,14 @@ module.exports = {
       return json(res, 200, st.fragor.slice(-25).reverse().map(f => ({
         inlägg: f.inlägg, kanal: f.kanal, frågare: f.frågare, fråga: f.fråga, styrka: f.styrka, ts: f.ts,
         händelse: f.händelse, följdTill: f.följdTill || null, iKo: !f.händelse && !f.fel && !f.dubblettAv,
-        språk: f.språk, dubblettAv: f.dubblettAv || null,
+        språk: f.språk, dubblettAv: f.dubblettAv || null, reserv: f.reserv > 0 ? f.reserv : null,
         besvarad: f.besvarad, obesvarad: !!(f.obesvarad && f.obesvarad > 0), kedja: f.kedja,
       })));
     }
     if (path === '/status' || path === '/' || path === '') {
       return json(res, 200, {
         förmåga: 'Örat', hört: st.hört, frågor: st.fragor.length, iKo: st.ko.length,
-        dubbletter: st.dubbletter, porträtt: st.portratt,
+        dubbletter: st.dubbletter, reservsvar: st.reservsvar, porträtt: st.portratt,
         besvarade: st.fragor.filter(f => f.besvarad).length,
         väntar: st.fragor.filter(f => f.händelse && !f.besvarad).length,
       });
