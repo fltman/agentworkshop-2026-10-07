@@ -67,6 +67,8 @@ module.exports = {
   init(ctx) {
     ctx.historik = läsHistorik(ctx.dataDir);
     ctx.granskade = new Set(ctx.historik.map((g) => g.handelse));
+    ctx.latenser = [];
+    ctx.senasteMetrikUtskick = 0;
   },
 
   async handle(req, res, ctx) {
@@ -78,6 +80,9 @@ module.exports = {
       const underkända = total - godkända;
       const godkändAndel = total ? Math.round((godkända / total) * 100) : 0;
       const snittStyrka = total ? Math.round(g.reduce((acc, x) => acc + x.styrka, 0) / total) : 0;
+
+      const latenser = ctx.latenser || [];
+      const snittLatensMs = latenser.length ? Math.round(latenser.reduce((a, b) => a + b, 0) / latenser.length) : null;
 
       const källorFrekvens = {};
       for (const item of g) {
@@ -94,6 +99,8 @@ module.exports = {
         underkända,
         godkändAndel,
         snittStyrka,
+        snittLatensMs,
+        latensHistorik: latenser.slice(-20),
         källorFrekvens,
       };
 
@@ -106,6 +113,49 @@ module.exports = {
 
   onEvent(e, ctx) {
     if (e.kvarter === ctx.team) return;              // inte granska oss själva
+
+    // Mäta total kedjelatens när svar.klart anländer
+    if (e.typ === 'svar.klart') {
+      const senaste = ctx.board.events(200);
+      const index = new Map(senaste.map((h) => [h.id, h]));
+      const kedja = förfäder(e, index);
+      const rotFråga = kedja.find((h) => h.typ === 'fråga.ny');
+      if (rotFråga && e.ts && rotFråga.ts) {
+        const latens = Math.max(100, e.ts - rotFråga.ts);
+        if (!ctx.latenser) ctx.latenser = [];
+        ctx.latenser.push(latens);
+        if (ctx.latenser.length > 50) ctx.latenser.shift();
+      }
+
+      // Punkt 2: Sänd granskaren.metrik på bussen med högst 1 utskick per 60 sekunder
+      const nu = Date.now();
+      if (!ctx.senasteMetrikUtskick || nu - ctx.senasteMetrikUtskick > 60000) {
+        const g = ctx.historik || [];
+        if (g.length > 0) {
+          const godkända = g.filter((x) => x.godkänt).length;
+          const godkändAndel = Math.round((godkända / g.length) * 100);
+          const snittStyrka = Math.round(g.reduce((acc, x) => acc + x.styrka, 0) / g.length);
+          const latenser = ctx.latenser || [];
+          const snittLatensMs = latenser.length ? Math.round(latenser.reduce((a, b) => a + b, 0) / latenser.length) : 0;
+          const rad = `Kvalitetsstatus: ${godkändAndel}% godkända svar (snittstyrka ${snittStyrka}), snittlatens ${(snittLatensMs / 1000).toFixed(1)}s`;
+
+          ctx.board.emit('granskaren.metrik', {
+            styrka: godkändAndel,
+            orsak: e.id,
+            nyttolast: {
+              godkänd_andel: godkändAndel,
+              snitt_styrka: snittStyrka,
+              snitt_latens_ms: snittLatensMs,
+              granskade_totalt: g.length,
+              rad,
+            },
+          });
+          ctx.senasteMetrikUtskick = nu;
+        }
+      }
+      return;
+    }
+
     if (e.typ !== 'svar.utkast') return;             // granska bara utkast, inte svar.klart eller svar.granskat
     if (!ctx.granskade) ctx.granskade = new Set();
     if (!ctx.historik) ctx.historik = [];
