@@ -68,8 +68,12 @@ module.exports = {
     historik.push({ id: e.id, ts: e.ts, kanal, sammanfattning, antalInlägg: poster.length });
     sparaHistorik(ctx, historik);
 
+    // Granskaren räknar bara källor med styrka >= 50: en lyckad sammanfattning ska alltså
+    // alltid ligga över det, en tom kanal får låg styrka så den inte räknas som ett bekräftat svar.
+    const styrka = poster.length === 0 ? 20 : Math.min(100, 70 + poster.length);
+
     ctx.board.emit('sammanfattning.klar', {
-      styrka: Math.min(100, poster.length * 5),
+      styrka,
       orsak: e.id,
       nyttolast: { kanal, sammanfattning, antalInlägg: poster.length },
     });
