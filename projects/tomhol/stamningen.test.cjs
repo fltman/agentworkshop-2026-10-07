@@ -134,7 +134,11 @@ test('only confirmed sender/types are consumed; malformed events produce explici
   s.event({ kvarter: 'other-team' });
   s.event({ typ: 'fråga.ny' });
   assert.equal(s.status().kanaler.length, 0);
+  s.event({ nyttolast: { hetaste: null, ord: 'stilla', kanaler: [] } });
   s.event({ nyttolast: {} });
+  assert.equal(s.status().fel, null);
+  assert.equal(s.status().kanaler.length, 0);
+  s.event({ nyttolast: { hetaste: '#bygge' } });
   assert.match(s.status().fel, /Ogiltig/);
   assert.equal(s.sent.length, 0);
   s.event({ nyttolast: { hetaste: 'kollegan-events' } });
