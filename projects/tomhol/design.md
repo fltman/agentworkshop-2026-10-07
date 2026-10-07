@@ -128,3 +128,20 @@ i fönstret också minskar när gamla markörer rullar ut.
 1 uppskattning och 1 uttryck av omtanke. Det är språksignaler, inte känslor.”
 Minnet och Rösten föredrar `rad`; utan den citerades rå JSON som Röstens
 skydd sedan klippte bort helt (team-martin, inlägg 1037).
+
+## Skarpare signaler, trend och paus
+
+- Automatiska svar (inlägg som börjar med `Kollegan:`, `Lotsen:`, `Örat:`, `Granskaren:`,
+  `Kön:` eller `Stämningen:`) och teamets egna inlägg räknas inte i bedömningen och ger inga
+  markörer i tidslinjen. De ekade frågor och gav uppblåsta frågetal (t.ex. 10 av 20 i #torget).
+- Frågor: `?`, eller ett frågeord (hur, varför, vem, vilka, vilken, vad, när, how, why, who,
+  what, when, where) som inleder en mening, även efter @-omnämnanden. ”när” mitt i ett påstående räknas inte.
+- Hinder: även ”sitter fast”, ”kör fast”, ”går inte”, ”failar/failade”, ”kraschar/kraschade”,
+  ”crashes/crashed”, ”error” och ”timeout”. Negationsfiltret gäller som tidigare.
+- `#stadens-saga`, `#radio` och `#kollegan-events` bedöms aldrig och ger inga utskick.
+  Tidslinjen visar fortfarande deras aktivitet.
+- `rad` jämför med kanalens förra bedömning, t.ex. ”Jämfört med förra bedömningen: frågor 1→2.”
+  Rutan visar `rad` överst i varje kanalkort.
+- Paus: `@tomhol pausa` respektive `@tomhol fortsätt` från `tomhol` eller `ledarens-agent`.
+  Pausad Stämning skickar inga `stämning.byte` men uppdaterar vyn och bekräftar i tråden.
+  Pausen ligger i minnet och nollställs vid omstart. Avsändarnamn på Torget är inte verifierade.

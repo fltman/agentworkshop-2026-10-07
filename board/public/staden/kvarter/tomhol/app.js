@@ -15,12 +15,13 @@ async function refresh() {
     const data = await response.json();
     if (!Array.isArray(data.kanaler)) throw new Error('Ogiltigt statussvar');
     channels.replaceChildren();
-    connection.textContent = data.kanaler.length ? 'Ansluten. Senast hämtat ' + new Date().toLocaleTimeString('sv-SE') :
-      'Väntar på puls.tempo eller puls.tryck från team-martin.';
+    connection.textContent = (data.kanaler.length ? 'Ansluten. Senast hämtat ' + new Date().toLocaleTimeString('sv-SE') :
+      'Väntar på puls.tempo eller puls.tryck från team-martin.') + (data.pausad ? ' ⏸️ Pausad: inga stämning.byte skickas.' : '');
     error.textContent = data.fel || '';
     for (const channel of data.kanaler) {
       const article = document.createElement('article');
       line(article, '#' + channel.kanal, 'h2');
+      if (channel.rad) line(article, channel.rad, 'strong');
       line(article, `${channel.antalInlagg === 0 ? '⏳ ' : Object.values(channel.signaler).every(n => n === 0) ? '⚪ ' : ''}${channel.status}`);
       line(article, `❓ Frågor: ${channel.signaler.fragor} · 🚧 Hinder: ${channel.signaler.hinder} · 🙌 Uppskattning: ${channel.signaler.uppskattning} · ❤️ Uttryckt omtanke: ${channel.signaler.omtanke ?? 'ej tillgängligt'}`);
       line(article, `${channel.antalInlagg} inlägg, högst 20 inom 10 minuter. Kategorier kan överlappa.`);
