@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <title>Leif – Kollegan</title>
+  <style>
+    :root {
+      --bg: #0d1220;
+      --panel: #121b2b;
+      --panel-2: #17263f;
+      --text: #edf3ff;
+      --muted: #9db1d1;
+      --accent: #7bdff2;
+      --accent-2: #a7f3d0;
+      --warn: #ffca6b;
+      --border: rgba(214, 222, 255, 0.14);
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 320px;
+      background: linear-gradient(180deg, var(--bg), #111827);
+      color: var(--text);
+      font: 15px/1.4 "Segoe UI", system-ui, sans-serif;
+    }
+    body {
+      display: grid;
+      place-items: center;
+      padding: 18px;
+    }
+    .card {
+      width: min(100%, 420px);
+      background: rgba(18, 27, 43, 0.94);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 22px 55px rgba(0,0,0,0.24);
+      overflow: hidden;
+    }
+    .header {
+      background: linear-gradient(135deg, var(--panel-2), var(--panel));
+      border-bottom: 1px solid var(--border);
+      padding: 16px 18px;
+    }
+    .eyebrow {
+      color: var(--accent);
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: 0.04em;
+    }
+    .body {
+      padding: 18px;
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0,1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .stat {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+    .label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .value {
+      font-size: 22px;
+      margin-top: 4px;
+      font-weight: 700;
+      color: var(--accent-2);
+    }
+    .translation {
+      background: rgba(123, 223, 242, 0.08);
+      border: 1px solid rgba(123, 223, 242, 0.2);
+      border-radius: 12px;
+      padding: 12px 14px;
+      margin-top: 12px;
+    }
+    .translation .small {
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      display: block;
+      margin-bottom: 6px;
+    }
+    .translation strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--warn);
+    }
+    .translation p {
+      margin: 0;
+      color: var(--text);
+    }
+    .empty {
+      color: var(--muted);
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div class="eyebrow">Kollegan</div>
+      <h1>Leif – Översättaren</h1>
+    </div>
+    <div class="body">
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="label">sv</div>
+          <div class="value" id="sv">0</div>
+        </div>
+        <div class="stat">
+          <div class="label">en</div>
+          <div class="value" id="en">0</div>
+        </div>
+        <div class="stat">
+          <div class="label">poster</div>
+          <div class="value" id="posts">0</div>
+        </div>
+      </div>
+
+      <div class="translation" id="translationBox">
+        <span class="small">senaste översättning</span>
+        <div id="empty" class="empty">Inga översättningar ännu.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function loadStatus() {
+      try {
+        const response = await fetch('/t/leif/status');
+        const data = await response.json();
+        document.getElementById('sv').textContent = data.counts && data.counts.sv ? data.counts.sv : 0;
+        document.getElementById('en').textContent = data.counts && data.counts.en ? data.counts.en : 0;
+        document.getElementById('posts').textContent = data.posts || 0;
+
+        const box = document.getElementById('translationBox');
+        const empty = document.getElementById('empty');
+        if (!data.last || !data.last.text) {
+          empty.textContent = 'Inga översättningar ännu.';
+          return;
+        }
+
+        if (empty) empty.remove();
+
+        const existing = box.querySelector('.translation-body');
+        const block = document.createElement('div');
+        block.className = 'translation-body';
+        block.innerHTML = `
+          <strong>${data.last.from} → ${data.last.language.toUpperCase()}</strong>
+          <p>${data.last.text}</p>
+          <div style="margin-top:8px;color:#9db1d1;font-size:12px;">${data.last.translated}</div>
+        `;
+        if (existing) existing.replaceWith(block);
+        else box.appendChild(block);
+      } catch (err) {
+        console.error('status failed', err);
+      }
+    }
+
+    loadStatus();
+    setInterval(loadStatus, 10000);
+  </script>
+</body>
+</html>
